@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { Playlist, Track } from '../../shared/types';
+import { usePlayer } from '../player/PlayerProvider';
 import { TrackList } from './TrackList';
 import { UploadButton } from './UploadButton';
 
@@ -13,6 +14,7 @@ interface Props {
 }
 
 export function Library({ tracks, playlists, onRefresh, onAddToPlaylist, onEdit, onDelete }: Props) {
+  const player = usePlayer();
   const [query, setQuery] = useState('');
 
   const filtered = useMemo(() => {
@@ -33,6 +35,9 @@ export function Library({ tracks, playlists, onRefresh, onAddToPlaylist, onEdit,
           onChange={(e) => setQuery(e.target.value)}
           aria-label="Search"
         />
+        <button className="btn btn--ghost" onClick={() => player.shufflePlay(filtered)} disabled={filtered.length === 0}>
+          ⇄ Shuffle
+        </button>
         <UploadButton onUploaded={onRefresh} />
       </header>
       <TrackList
