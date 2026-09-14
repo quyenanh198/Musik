@@ -40,6 +40,23 @@ Example: `MUSIK_DATA_DIR=/Volumes/Music/musik PORT=8080 npm start`
 
 Back up by copying the data folder. Other devices on your LAN can use the player at `http://<mac-mini-ip>:3000`.
 
+### Auto-start with launchd (macOS)
+
+After `npm ci && npm run build`:
+
+```bash
+sh deploy/install-launchd.sh
+```
+
+This writes `~/Library/LaunchAgents/com.musik.server.plist` from the template in `deploy/`, using the `node` on your `PATH` and the repo's location, then loads it. The server starts at login, restarts if it crashes, and logs to `~/Library/Logs/musik.log`. Edit the plist to change `PORT` or `MUSIK_DATA_DIR`, then re-run the script. A LaunchAgent only runs while a user is logged in, so enable automatic login on a headless Mac mini (System Settings → Users & Groups).
+
+Manage it with:
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.musik.server   # restart (e.g. after git pull + npm run build)
+launchctl bootout gui/$(id -u)/com.musik.server        # stop and unload
+```
+
 ## API
 
 | Method   | Path                                        | Description                                |
