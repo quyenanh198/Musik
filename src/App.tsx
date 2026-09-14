@@ -15,6 +15,7 @@ export function App() {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [version, setVersion] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
+  const [newPlaylistName, setNewPlaylistName] = useState<string | null>(null);
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -37,10 +38,11 @@ export function App() {
   }, [refreshTracks, refreshPlaylists]);
 
   const createPlaylist = async () => {
-    const name = prompt('Playlist name');
-    if (!name?.trim()) return;
+    const name = newPlaylistName?.trim();
+    if (!name) return;
     try {
       const created = await api.createPlaylist(name);
+      setNewPlaylistName(null);
       refreshPlaylists();
       setView({ kind: 'playlist', id: created.id });
     } catch (e) {
@@ -92,10 +94,31 @@ export function App() {
         </button>
         <div className="sidebar__heading">
           <span>Playlists</span>
-          <button className="icon" onClick={() => void createPlaylist()} title="New playlist">
+          <button className="icon" onClick={() => setNewPlaylistName('')} title="New playlist">
             +
           </button>
         </div>
+        {newPlaylistName !== null && (
+          <form
+            className="inline-form sidebar__new"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void createPlaylist();
+            }}
+          >
+            <input
+              value={newPlaylistName}
+              onChange={(e) => setNewPlaylistName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Escape' && setNewPlaylistName(null)}
+              placeholder="Playlist name"
+              aria-label="New playlist name"
+              autoFocus
+            />
+            <button className="btn" type="submit" disabled={!newPlaylistName.trim()}>
+              Add
+            </button>
+          </form>
+        )}
         {playlists.map((pl) => (
           <button
             key={pl.id}

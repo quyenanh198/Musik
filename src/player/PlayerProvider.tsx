@@ -3,6 +3,8 @@ import type { Track } from '../../shared/types';
 import { api } from '../api';
 
 export type RepeatMode = 'off' | 'all' | 'one';
+/** Pause at a wall-clock time, or after the current track ends. */
+export type SleepTimer = { kind: 'minutes'; endsAt: number } | { kind: 'track' } | null;
 
 interface PlayerState {
   queue: Track[];
@@ -13,12 +15,17 @@ interface PlayerState {
   volume: number;
   shuffle: boolean;
   repeat: RepeatMode;
+  sleep: SleepTimer;
 }
 
 interface PlayerApi extends PlayerState {
   current: Track | null;
   /** Replace the queue and start at `startIndex`. */
   playQueue: (tracks: Track[], startIndex: number) => void;
+  /** Turn shuffle on and play `tracks` in random order. */
+  shufflePlay: (tracks: Track[]) => void;
+  /** `minutes` > 0 pauses after that long, 'track' after the current track, null clears. */
+  setSleep: (value: number | 'track' | null) => void;
   toggle: () => void;
   next: () => void;
   prev: () => void;
@@ -62,6 +69,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     volume: Number(localStorage.getItem(VOLUME_KEY) ?? 1),
     shuffle: false,
     repeat: 'off',
+    sleep: null,
   }));
   // Event handlers (audio events, Media Session) need the latest state without re-binding.
   const stateRef = useRef(state);
@@ -131,6 +139,18 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const shufflePlay = useCallback((tracks: Track[]) => {
+    if (tracks.length === 0) return;
+    setState((s) => ({ ...s, shuffle: true, queue: shuffled(tracks), index: 0, currentTime: 0, playing: true }));
+  }, []);
+
+  const setSleep = useCallback((value: number | 'track' | null) => {
+    setState((s) => ({
+      ...s,
+      sleep: value === null ? null : value === 'track' ? { kind: 'track' } : { kind: 'minutes', endsAt: Date.now() + value * 60_000 },
+    }));
+  }, []);
+
   const toggleShuffle = useCallback(() => {
     setState((s) => {
       const shuffle = !s.shuffle;
@@ -182,6 +202,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const onPlay = () => setState((s) => ({ ...s, playing: true }));
     const onPause = () => setState((s) => ({ ...s, playing: false }));
     const onEnded = () => {
+      if (stateRef.current.sleep?.kind === 'track') {
+        setState((s) => ({ ...s, playing: false, sleep: null }));
+        return;
+      }
       if (stateRef.current.repeat === 'one') {
         audio.currentTime = 0;
         void audio.play().catch(() => {});
@@ -200,6 +224,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       audio.removeEventListener('ended', onEnded);
     };
   }, [audio, next]);
+
+  // Sleep timer: pause when the deadline passes.
+  const sleepEndsAt = state.sleep?.kind === 'minutes' ? state.sleep.endsAt : null;
+  useEffect(() => {
+    if (sleepEndsAt === null) return;
+    const id = window.setTimeout(() => {
+      audio.pause();
+      setState((s) => ({ ...s, sleep: null }));
+    }, Math.max(0, sleepEndsAt - Date.now()));
+    return () => window.clearTimeout(id);
+  }, [audio, sleepEndsAt]);
 
   // Media Session: lock-screen / headset / OS media controls while in the background.
   useEffect(() => {
@@ -255,6 +290,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       ...state,
       current,
       playQueue,
+      shufflePlay,
+      setSleep,
       toggle,
       next,
       prev,
@@ -265,7 +302,22 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       removeTrack,
       updateTrack,
     }),
-    [state, current, playQueue, toggle, next, prev, seek, setVolume, toggleShuffle, cycleRepeat, removeTrack, updateTrack],
+    [
+      state,
+      current,
+      playQueue,
+      shufflePlay,
+      setSleep,
+      toggle,
+      next,
+      prev,
+      seek,
+      setVolume,
+      toggleShuffle,
+      cycleRepeat,
+      removeTrack,
+      updateTrack,
+    ],
   );
 
   return <PlayerContext.Provider value={value}>{children}</PlayerContext.Provider>;

@@ -1,6 +1,6 @@
 # Musik
 
-Self-hosted web music player. Upload your audio files, organise them into playlists, and keep listening while the tab is in the background (lock-screen / headset controls via the Media Session API, installable as a PWA).
+Self-hosted web music player. Upload your audio files, organise them into playlists, shuffle-play a library or playlist, set a sleep timer, and keep listening while the tab is in the background (lock-screen / headset controls via the Media Session API, installable as a PWA).
 
 - **Server:** Node 22, Express 5, SQLite (built-in `node:sqlite`, no native deps)
 - **Client:** React 19, Vite 7, TypeScript

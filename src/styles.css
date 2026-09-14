@@ -81,6 +81,11 @@ button:disabled { cursor: default; opacity: 0.4; }
   padding: 8px 14px;
 }
 .inline-form { display: flex; gap: 8px; }
+.sidebar__new { padding: 4px 8px; }
+.sidebar__new input { flex: 1; min-width: 0; }
+.sidebar__new .btn { padding: 6px 12px; }
+.sleep { display: flex; align-items: center; gap: 4px; color: var(--muted); }
+.sleep--active { color: var(--accent); }
 .inline-form input, .edit input {
   background: var(--bg-3);
   border: 1px solid var(--border);
@@ -97,6 +102,7 @@ button:disabled { cursor: default; opacity: 0.4; }
   border-radius: 20px;
   padding: 8px 16px;
   font-weight: 600;
+  white-space: nowrap;
 }
 .btn--ghost { background: var(--bg-3); color: var(--fg); }
 .icon {

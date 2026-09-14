@@ -1,5 +1,52 @@
+import { useEffect, useState } from 'react';
 import { formatDuration } from '../api';
 import { usePlayer } from '../player/PlayerProvider';
+
+const SLEEP_OPTIONS = [15, 30, 45, 60] as const;
+
+function SleepTimer() {
+  const p = usePlayer();
+  const endsAt = p.sleep?.kind === 'minutes' ? p.sleep.endsAt : null;
+  const [now, setNow] = useState(Date.now);
+
+  // Tick once a second only while a countdown is running.
+  useEffect(() => {
+    if (endsAt === null) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [endsAt]);
+
+  const remaining = endsAt === null ? null : formatDuration(Math.max(0, (endsAt - now) / 1000));
+
+  return (
+    <label className={`sleep ${p.sleep ? 'sleep--active' : ''}`} title="Sleep timer">
+      <span aria-hidden>⏾</span>
+      <select
+        className="select"
+        aria-label="Sleep timer"
+        value={p.sleep === null ? '' : p.sleep.kind === 'track' ? 'track' : 'minutes'}
+        onChange={(e) => {
+          const v = e.target.value;
+          p.setSleep(v === '' ? null : v === 'track' ? 'track' : Number(v));
+        }}
+      >
+        <option value="">{p.sleep ? 'Off' : 'Sleep'}</option>
+        {SLEEP_OPTIONS.map((m) => (
+          <option key={m} value={m}>
+            {m} min
+          </option>
+        ))}
+        <option value="track">End of track</option>
+        {remaining !== null && (
+          <option value="minutes" hidden>
+            {remaining} left
+          </option>
+        )}
+      </select>
+    </label>
+  );
+}
 
 export function PlayerBar() {
   const p = usePlayer();
@@ -64,6 +111,7 @@ export function PlayerBar() {
       </div>
 
       <div className="player__volume">
+        <SleepTimer />
         <span aria-hidden>🔊</span>
         <input
           type="range"

@@ -96,6 +96,9 @@ export function PlaylistView({
           <button className="btn" onClick={() => player.playQueue(detail.tracks, 0)} disabled={detail.tracks.length === 0}>
             ▶ Play all
           </button>
+          <button className="btn btn--ghost" onClick={() => player.shufflePlay(detail.tracks)} disabled={detail.tracks.length === 0}>
+            ⇄ Shuffle
+          </button>
           <button
             className="btn btn--ghost"
             onClick={() => {
