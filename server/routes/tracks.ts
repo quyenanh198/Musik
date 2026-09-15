@@ -74,6 +74,50 @@ export function tracksRouter(db: Db, uploadDir: string): Router {
     res.status(201).json(getTrack(String(result.lastInsertRowid)));
   });
 
+  const readIds = (body: unknown): number[] => {
+    const raw = (typeof body === 'object' && body !== null ? (body as { ids?: unknown }).ids : undefined) ?? [];
+    const ids = Array.isArray(raw) ? raw.map(Number).filter((n) => Number.isInteger(n)) : [];
+    if (ids.length === 0 || (Array.isArray(raw) && ids.length !== raw.length)) throw new HttpError(400, '"ids" is required');
+    return [...new Set(ids)];
+  };
+
+  /** Bulk edit: `{ ids, patch: { title?, artist?, album? } }` — only the fields present are changed, on every id. */
+  router.patch('/', (req, res) => {
+    const ids = readIds(req.body);
+    const patch = ((req.body as { patch?: unknown }).patch ?? {}) as Partial<Pick<Track, 'title' | 'artist' | 'album'>>;
+    const sets: string[] = [];
+    const values: string[] = [];
+    if (typeof patch.title === 'string' && patch.title.trim()) { sets.push('title = ?'); values.push(patch.title.trim()); }
+    if (typeof patch.artist === 'string') { sets.push('artist = ?'); values.push(patch.artist.trim()); }
+    if (typeof patch.album === 'string') { sets.push('album = ?'); values.push(patch.album.trim()); }
+    if (sets.length === 0) throw new HttpError(400, 'Nothing to update');
+    const update = db.prepare(`UPDATE tracks SET ${sets.join(', ')} WHERE id = ?`);
+    db.exec('BEGIN');
+    try {
+      for (const id of ids) update.run(...values, id);
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
+    const placeholders = ids.map(() => '?').join(',');
+    res.json(db.prepare(`SELECT ${TRACK_COLUMNS} FROM tracks WHERE id IN (${placeholders})`).all(...ids));
+  });
+
+  /** Bulk delete: `{ ids }` — removes rows and files; unknown ids are ignored. */
+  router.post('/delete', async (req, res) => {
+    const ids = readIds(req.body);
+    const files: string[] = [];
+    for (const id of ids) {
+      const row = selectFile.get(id) as { filename: string } | undefined;
+      if (!row) continue;
+      db.prepare('DELETE FROM tracks WHERE id = ?').run(id);
+      files.push(row.filename);
+    }
+    await Promise.all(files.map((f) => unlink(path.join(uploadDir, f)).catch(() => {})));
+    res.json({ deleted: files.length });
+  });
+
   router.get('/:id', (req, res) => {
     res.json(getTrack(req.params.id));
   });

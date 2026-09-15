@@ -63,22 +63,48 @@ export function playlistsRouter(db: Db): Router {
     res.status(204).end();
   });
 
+  /** Body `{ trackId }` or `{ trackIds: [...] }` — one request adds many tracks, in the given order. */
+  const readTrackIds = (body: unknown): number[] => {
+    const b = (typeof body === 'object' && body !== null ? body : {}) as { trackId?: unknown; trackIds?: unknown };
+    const raw = Array.isArray(b.trackIds) ? b.trackIds : b.trackId !== undefined ? [b.trackId] : [];
+    const ids = raw.map(Number).filter((n) => Number.isInteger(n));
+    if (ids.length === 0 || ids.length !== raw.length) throw new HttpError(400, '"trackId" or "trackIds" is required');
+    return [...new Set(ids)];
+  };
+
   router.post('/:id/tracks', (req, res) => {
     getPlaylist(req.params.id);
-    const trackId = Number((req.body as { trackId?: unknown })?.trackId);
-    if (!Number.isInteger(trackId)) throw new HttpError(400, '"trackId" is required');
-    if (!db.prepare('SELECT 1 FROM tracks WHERE id = ?').get(trackId)) throw new HttpError(404, 'Track not found');
+    const trackIds = readTrackIds(req.body);
+    const exists = db.prepare('SELECT 1 FROM tracks WHERE id = ?');
+    const missing = trackIds.filter((id) => !exists.get(id));
+    if (missing.length) throw new HttpError(404, `Track not found: ${missing.join(', ')}`);
 
     const playlistId = Number(req.params.id);
-    const { next } = db
-      .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS next FROM playlist_tracks WHERE playlist_id = ?')
-      .get(playlistId) as { next: number };
-    db.prepare('INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?, ?, ?)').run(
-      playlistId,
-      trackId,
-      next,
-    );
+    const insert = db.prepare('INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?, ?, ?)');
+    db.exec('BEGIN');
+    try {
+      let { next } = db
+        .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS next FROM playlist_tracks WHERE playlist_id = ?')
+        .get(playlistId) as { next: number };
+      for (const trackId of trackIds) {
+        if (insert.run(playlistId, trackId, next).changes > 0) next += 1;
+      }
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
     res.status(201).json(getDetail(req.params.id));
+  });
+
+  /** Remove many tracks at once: `{ trackIds: [...] }`. Ids not in the playlist are ignored. */
+  router.post('/:id/tracks/remove', (req, res) => {
+    getPlaylist(req.params.id);
+    const trackIds = readTrackIds(req.body);
+    const del = db.prepare('DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?');
+    let removed = 0;
+    for (const trackId of trackIds) removed += Number(del.run(Number(req.params.id), trackId).changes);
+    res.json({ removed, ...getDetail(req.params.id) });
   });
 
   router.delete('/:id/tracks/:trackId', (req, res) => {

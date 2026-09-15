@@ -1,19 +1,21 @@
 import { useMemo, useState } from 'react';
 import type { Playlist, Track } from '../../shared/types';
 import { usePlayer } from '../player/PlayerProvider';
-import { TrackList } from './TrackList';
+import { TrackList, type TrackPatch } from './TrackList';
 import { UploadButton } from './UploadButton';
 
 interface Props {
   tracks: Track[];
   playlists: Playlist[];
   onRefresh: () => void;
-  onAddToPlaylist: (playlistId: number, track: Track) => void;
+  onAddToPlaylist: (playlistId: number, tracks: Track[]) => void;
   onEdit: (track: Track, patch: Pick<Track, 'title' | 'artist' | 'album'>) => Promise<void>;
+  onEditMany: (tracks: Track[], patch: TrackPatch) => Promise<void>;
   onDelete: (track: Track) => void;
+  onDeleteMany: (tracks: Track[]) => void;
 }
 
-export function Library({ tracks, playlists, onRefresh, onAddToPlaylist, onEdit, onDelete }: Props) {
+export function Library({ tracks, playlists, onRefresh, onAddToPlaylist, onEdit, onEditMany, onDelete, onDeleteMany }: Props) {
   const player = usePlayer();
   const [query, setQuery] = useState('');
 
@@ -45,7 +47,9 @@ export function Library({ tracks, playlists, onRefresh, onAddToPlaylist, onEdit,
         playlists={playlists}
         onAddToPlaylist={onAddToPlaylist}
         onEdit={onEdit}
+        onEditMany={onEditMany}
         onDelete={onDelete}
+        onDeleteMany={onDeleteMany}
         emptyMessage={tracks.length === 0 ? 'No tracks yet. Upload some audio files to get started.' : 'No matches.'}
       />
     </section>

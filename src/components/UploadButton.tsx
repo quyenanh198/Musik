@@ -1,7 +1,14 @@
 import { useRef, useState } from 'react';
+import type { Track } from '../../shared/types';
 import { api } from '../api';
 
-export function UploadButton({ onUploaded }: { onUploaded: () => void }) {
+interface Props {
+  /** Called after each file lands (with that track) so lists refresh as uploads go, and once at the end with all of them. */
+  onUploaded: (tracks: Track[], done: boolean) => void;
+  label?: string;
+}
+
+export function UploadButton({ onUploaded, label = '⬆ Upload' }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -11,18 +18,21 @@ export function UploadButton({ onUploaded }: { onUploaded: () => void }) {
     setError(null);
     setProgress({ done: 0, total: files.length });
     const failures: string[] = [];
+    const uploaded: Track[] = [];
     for (const file of Array.from(files)) {
       try {
-        await api.uploadTrack(file);
+        const track = await api.uploadTrack(file);
+        uploaded.push(track);
+        onUploaded([track], false);
       } catch (e) {
         failures.push(`${file.name}: ${(e as Error).message}`);
       }
       setProgress((p) => (p ? { ...p, done: p.done + 1 } : p));
-      onUploaded();
     }
     setProgress(null);
     if (failures.length) setError(failures.join('\n'));
     if (inputRef.current) inputRef.current.value = '';
+    onUploaded(uploaded, true);
   };
 
   return (
@@ -36,7 +46,7 @@ export function UploadButton({ onUploaded }: { onUploaded: () => void }) {
         onChange={(e) => void handleFiles(e.target.files)}
       />
       <button className="btn" onClick={() => inputRef.current?.click()} disabled={progress !== null}>
-        {progress ? `Uploading ${progress.done}/${progress.total}…` : '⬆ Upload'}
+        {progress ? `Uploading ${progress.done}/${progress.total}…` : label}
       </button>
       {error && <pre className="error">{error}</pre>}
     </div>

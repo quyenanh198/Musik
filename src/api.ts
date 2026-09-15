@@ -30,6 +30,10 @@ export const api = {
   updateTrack: (id: number, patch: Partial<Pick<Track, 'title' | 'artist' | 'album'>>) =>
     request<Track>(`/api/tracks/${id}`, json('PATCH', patch)),
   deleteTrack: (id: number) => request<void>(`/api/tracks/${id}`, { method: 'DELETE' }),
+  /** Same patch applied to many tracks; only the fields present are changed. */
+  updateTracks: (ids: number[], patch: Partial<Pick<Track, 'title' | 'artist' | 'album'>>) =>
+    request<Track[]>('/api/tracks', json('PATCH', { ids, patch })),
+  deleteTracks: (ids: number[]) => request<{ deleted: number }>('/api/tracks/delete', json('POST', { ids })),
   streamUrl: (id: number) => `/api/tracks/${id}/stream`,
 
   listPlaylists: () => request<Playlist[]>('/api/playlists'),
@@ -37,10 +41,13 @@ export const api = {
   getPlaylist: (id: number) => request<PlaylistDetail>(`/api/playlists/${id}`),
   renamePlaylist: (id: number, name: string) => request<PlaylistDetail>(`/api/playlists/${id}`, json('PATCH', { name })),
   deletePlaylist: (id: number) => request<void>(`/api/playlists/${id}`, { method: 'DELETE' }),
-  addToPlaylist: (playlistId: number, trackId: number) =>
-    request<PlaylistDetail>(`/api/playlists/${playlistId}/tracks`, json('POST', { trackId })),
+  /** One request adds every id, in order; ids already in the playlist are skipped. */
+  addToPlaylist: (playlistId: number, trackIds: number[]) =>
+    request<PlaylistDetail>(`/api/playlists/${playlistId}/tracks`, json('POST', { trackIds })),
   removeFromPlaylist: (playlistId: number, trackId: number) =>
     request<void>(`/api/playlists/${playlistId}/tracks/${trackId}`, { method: 'DELETE' }),
+  removeManyFromPlaylist: (playlistId: number, trackIds: number[]) =>
+    request<PlaylistDetail & { removed: number }>(`/api/playlists/${playlistId}/tracks/remove`, json('POST', { trackIds })),
 };
 
 export function formatDuration(seconds: number): string {

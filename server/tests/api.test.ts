@@ -186,3 +186,68 @@ describe('fixFilename', () => {
     expect(fixFilename('caf\u00e9.mp3')).toBe('caf\u00e9.mp3');
   });
 });
+
+describe('batch operations', () => {
+  const upload3 = async () => {
+    const a = (await uploadTrack('a.wav')).body;
+    const b = (await uploadTrack('b.wav')).body;
+    const c = (await uploadTrack('c.wav')).body;
+    return [a, b, c] as Array<{ id: number }>;
+  };
+
+  it('adds many tracks to a playlist in one request, in order, skipping duplicates', async () => {
+    const [a, b, c] = await upload3();
+    const { body: pl } = await request(app).post('/api/playlists').send({ name: 'Mix' });
+    const res = await request(app).post(`/api/playlists/${pl.id}/tracks`).send({ trackIds: [c.id, a.id, c.id] });
+    expect(res.status).toBe(201);
+    expect(res.body.tracks.map((t: { id: number }) => t.id)).toEqual([c.id, a.id]);
+    const again = await request(app).post(`/api/playlists/${pl.id}/tracks`).send({ trackIds: [a.id, b.id] });
+    expect(again.body.tracks.map((t: { id: number }) => t.id)).toEqual([c.id, a.id, b.id]);
+  });
+
+  it('rejects a batch containing an unknown track', async () => {
+    const [a] = await upload3();
+    const { body: pl } = await request(app).post('/api/playlists').send({ name: 'Mix' });
+    const res = await request(app).post(`/api/playlists/${pl.id}/tracks`).send({ trackIds: [a.id, 9999] });
+    expect(res.status).toBe(404);
+    const detail = await request(app).get(`/api/playlists/${pl.id}`);
+    expect(detail.body.tracks).toEqual([]);
+  });
+
+  it('removes many tracks from a playlist in one request', async () => {
+    const [a, b, c] = await upload3();
+    const { body: pl } = await request(app).post('/api/playlists').send({ name: 'Mix' });
+    await request(app).post(`/api/playlists/${pl.id}/tracks`).send({ trackIds: [a.id, b.id, c.id] });
+    const res = await request(app).post(`/api/playlists/${pl.id}/tracks/remove`).send({ trackIds: [a.id, c.id, 12345] });
+    expect(res.status).toBe(200);
+    expect(res.body.removed).toBe(2);
+    expect(res.body.tracks.map((t: { id: number }) => t.id)).toEqual([b.id]);
+  });
+
+  it('bulk-edits artist/album without touching titles', async () => {
+    const [a, b, c] = await upload3();
+    const res = await request(app).patch('/api/tracks').send({ ids: [a.id, b.id], patch: { artist: 'Trịnh Công Sơn', album: ' Sơn ca 7 ' } });
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    for (const t of res.body) expect(t).toMatchObject({ artist: 'Trịnh Công Sơn', album: 'Sơn ca 7' });
+    expect(res.body.map((t: { title: string }) => t.title).sort()).toEqual(['a', 'b']);
+    const untouched = await request(app).get(`/api/tracks/${c.id}`);
+    expect(untouched.body.artist).toBe('');
+  });
+
+  it('rejects a bulk edit with nothing to change', async () => {
+    const [a] = await upload3();
+    const res = await request(app).patch('/api/tracks').send({ ids: [a.id], patch: {} });
+    expect(res.status).toBe(400);
+  });
+
+  it('bulk-deletes tracks and their files', async () => {
+    const [a, b, c] = await upload3();
+    const res = await request(app).post('/api/tracks/delete').send({ ids: [a.id, c.id, 777] });
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toBe(2);
+    const list = await request(app).get('/api/tracks');
+    expect(list.body.map((t: { id: number }) => t.id)).toEqual([b.id]);
+    expect(readdirSync(path.join(dir, 'uploads'))).toHaveLength(1);
+  });
+});

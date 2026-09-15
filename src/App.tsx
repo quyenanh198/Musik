@@ -4,6 +4,7 @@ import { api } from './api';
 import { Library } from './components/Library';
 import { PlayerBar } from './components/PlayerBar';
 import { PlaylistView } from './components/PlaylistView';
+import type { TrackPatch } from './components/TrackList';
 import { usePlayer } from './player/PlayerProvider';
 
 type View = { kind: 'library' } | { kind: 'playlist'; id: number };
@@ -50,11 +51,53 @@ export function App() {
     }
   };
 
-  const addToPlaylist = async (playlistId: number, track: Track) => {
+  const addToPlaylist = async (playlistId: number, toAdd: Track[]) => {
+    if (toAdd.length === 0) return;
     try {
-      await api.addToPlaylist(playlistId, track.id);
+      const before = playlists.find((p) => p.id === playlistId);
+      const detail = await api.addToPlaylist(
+        playlistId,
+        toAdd.map((t) => t.id),
+      );
       refreshPlaylists();
-      notify(`Added "${track.title}" to ${playlists.find((p) => p.id === playlistId)?.name ?? 'playlist'}`);
+      const added = before ? detail.trackCount - before.trackCount : toAdd.length;
+      const name = detail.name;
+      notify(
+        toAdd.length === 1
+          ? added > 0
+            ? `Added "${toAdd[0].title}" to ${name}`
+            : `"${toAdd[0].title}" is already in ${name}`
+          : `Added ${added} of ${toAdd.length} tracks to ${name}${added < toAdd.length ? ' (rest were already there)' : ''}`,
+      );
+    } catch (e) {
+      notify((e as Error).message);
+    }
+  };
+
+  const editMany = async (toEdit: Track[], patch: TrackPatch) => {
+    if (toEdit.length === 0) return;
+    try {
+      const updated = await api.updateTracks(
+        toEdit.map((t) => t.id),
+        patch,
+      );
+      updated.forEach((t) => player.updateTrack(t));
+      refreshTracks();
+      notify(`Updated ${updated.length} tracks`);
+    } catch (e) {
+      notify((e as Error).message);
+    }
+  };
+
+  const deleteMany = async (toDelete: Track[]) => {
+    if (toDelete.length === 0) return;
+    if (!confirm(`Delete ${toDelete.length} tracks permanently? This also removes them from every playlist.`)) return;
+    try {
+      const { deleted } = await api.deleteTracks(toDelete.map((t) => t.id));
+      toDelete.forEach((t) => player.removeTrack(t.id));
+      refreshTracks();
+      refreshPlaylists();
+      notify(`Deleted ${deleted} tracks`);
     } catch (e) {
       notify((e as Error).message);
     }
@@ -136,21 +179,28 @@ export function App() {
             tracks={tracks}
             playlists={playlists}
             onRefresh={refreshTracks}
-            onAddToPlaylist={addToPlaylist}
+            onAddToPlaylist={(pid, ts) => void addToPlaylist(pid, ts)}
             onEdit={editTrack}
+            onEditMany={editMany}
             onDelete={deleteTrack}
+            onDeleteMany={(ts) => void deleteMany(ts)}
           />
         ) : (
           <PlaylistView
             key={view.id}
             id={view.id}
             playlists={playlists}
+            library={tracks}
             version={version}
             onPlaylistsChanged={refreshPlaylists}
+            onTracksChanged={refreshTracks}
             onDeleted={() => setView({ kind: 'library' })}
             onAddToPlaylist={addToPlaylist}
             onEdit={editTrack}
+            onEditMany={editMany}
             onDelete={deleteTrack}
+            onDeleteMany={(ts) => void deleteMany(ts)}
+            notify={notify}
           />
         )}
       </main>
