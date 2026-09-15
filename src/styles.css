@@ -178,6 +178,8 @@ button:disabled { cursor: default; opacity: 0.4; }
 .pick--on { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .pick input { accent-color: var(--accent); width: 16px; height: 16px; }
 .pick__title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick--row { grid-template-columns: 24px 1fr auto 28px; }
+.pick__edit { min-width: 0; width: 100%; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--accent); background: var(--bg-3); }
 .tracks__dur { width: 60px; text-align: right; }
 .tracks__actions { width: 1%; white-space: nowrap; text-align: right; }
 .tracks__title { font-weight: 500; }

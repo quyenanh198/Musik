@@ -314,4 +314,13 @@ describe('import from AudioExtract', () => {
   it('rejects an empty selection', async () => {
     expect((await request(app).post('/api/import/audioextract').send({ paths: [] })).status).toBe(400);
   });
+
+  it('lets the caller pick the title while importing', async () => {
+    const res = await request(app)
+      .post('/api/import/audioextract')
+      .send({ items: [{ path: 't1/Bài hát.wav', title: '  Bài hát (bản chuẩn)  ' }, { path: 't1/Bài hát.wav', title: 'dup' }] });
+    expect(res.status).toBe(201);
+    expect(res.body.imported).toHaveLength(1);
+    expect(res.body.imported[0].title).toBe('Bài hát (bản chuẩn)');
+  });
 });

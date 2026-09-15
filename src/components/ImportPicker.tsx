@@ -18,6 +18,9 @@ export function ImportPicker({
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [chosen, setChosen] = useState<Set<string>>(new Set());
+  // Optional per-file title, edited inline; empty = keep the tag/filename.
+  const [titles, setTitles] = useState<Record<string, string>>({});
+  const [editing, setEditing] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -53,7 +56,10 @@ export function ImportPicker({
     setBusy(true);
     setError(null);
     try {
-      const result = await api.importFromAudioExtract([...chosen], playlistId);
+      const result = await api.importFromAudioExtract(
+        [...chosen].map((p) => ({ path: p, title: titles[p]?.trim() || undefined })),
+        playlistId,
+      );
       onDone(result.imported, result.failed);
     } catch (e) {
       setError((e as Error).message);
@@ -87,15 +93,58 @@ export function ImportPicker({
           ) : shown.length === 0 ? (
             <p className="muted">{files && files.length === 0 ? 'Nothing extracted yet — results appear here for 7 days.' : 'No matches.'}</p>
           ) : (
-            shown.map((f) => (
-              <label key={f.path} className={`pick${chosen.has(f.path) ? ' pick--on' : ''}`}>
-                <input type="checkbox" checked={chosen.has(f.path)} onChange={() => toggle(f.path)} disabled={busy} />
-                <span className="pick__title">{f.name}</span>
-                <span className="muted">
-                  {formatSize(f.size)} · {new Date(f.updatedAt).toLocaleDateString()}
-                </span>
-              </label>
-            ))
+            shown.map((f) => {
+              const base = f.name.replace(/\.[^.]+$/, '');
+              return (
+                <div key={f.path} className={`pick pick--row${chosen.has(f.path) ? ' pick--on' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={chosen.has(f.path)}
+                    onChange={() => toggle(f.path)}
+                    disabled={busy}
+                    aria-label={`Select ${f.name}`}
+                  />
+                  {editing === f.path ? (
+                    <input
+                      className="pick__edit"
+                      value={titles[f.path] ?? base}
+                      placeholder={base}
+                      autoFocus
+                      aria-label={`Title for ${f.name}`}
+                      onChange={(e) => setTitles((t) => ({ ...t, [f.path]: e.target.value }))}
+                      onBlur={() => setEditing(null)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === 'Escape') setEditing(null);
+                      }}
+                    />
+                  ) : (
+                    <span className="pick__title" onClick={() => toggle(f.path)}>
+                      {titles[f.path]?.trim() ? (
+                        <>
+                          {titles[f.path]} <span className="muted">({f.name})</span>
+                        </>
+                      ) : (
+                        f.name
+                      )}
+                    </span>
+                  )}
+                  <span className="muted">
+                    {formatSize(f.size)} · {new Date(f.updatedAt).toLocaleDateString()}
+                  </span>
+                  <button
+                    className="icon"
+                    title="Set title"
+                    disabled={busy}
+                    onClick={() => {
+                      setChosen((prev) => new Set(prev).add(f.path));
+                      setEditing(f.path);
+                    }}
+                  >
+                    ✎
+                  </button>
+                </div>
+              );
+            })
           )}
         </div>
         <div className="modal__foot">

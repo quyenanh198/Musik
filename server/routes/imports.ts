@@ -61,11 +61,25 @@ export function importsRouter(db: Db, uploadDir: string, { audioExtractUrl }: Im
     res.json(list);
   });
 
-  /** `{ paths: string[], playlistId?: number }` → copies each file in, returns what landed and what failed. */
+  /**
+   * `{ paths: string[] }` or `{ items: [{ path, title? }] }`, plus optional `playlistId`
+   * → copies each file in (a given title overrides the tag/filename), returns what landed and what failed.
+   */
   router.post('/audioextract', async (req, res) => {
-    const body = (req.body ?? {}) as { paths?: unknown; playlistId?: unknown };
-    const paths = Array.isArray(body.paths) ? body.paths.filter((p): p is string => typeof p === 'string' && p.length > 0) : [];
-    if (paths.length === 0) throw new HttpError(400, '"paths" is required');
+    const body = (req.body ?? {}) as { paths?: unknown; items?: unknown; playlistId?: unknown };
+    const items: { path: string; title?: string }[] = [];
+    if (Array.isArray(body.items)) {
+      for (const it of body.items) {
+        if (it && typeof it === 'object' && typeof (it as { path?: unknown }).path === 'string' && (it as { path: string }).path) {
+          const title = (it as { title?: unknown }).title;
+          items.push({ path: (it as { path: string }).path, title: typeof title === 'string' && title.trim() ? title.trim() : undefined });
+        }
+      }
+    }
+    if (Array.isArray(body.paths)) {
+      for (const p of body.paths) if (typeof p === 'string' && p) items.push({ path: p });
+    }
+    if (items.length === 0) throw new HttpError(400, '"paths" or "items" is required');
     let playlistId: number | undefined;
     if (body.playlistId !== undefined && body.playlistId !== null && body.playlistId !== '') {
       playlistId = Number(body.playlistId);
@@ -75,7 +89,10 @@ export function importsRouter(db: Db, uploadDir: string, { audioExtractUrl }: Im
 
     const imported: Track[] = [];
     const failed: { path: string; error: string }[] = [];
-    for (const rel of [...new Set(paths)]) {
+    const seen = new Set<string>();
+    for (const { path: rel, title: wanted } of items) {
+      if (seen.has(rel)) continue;
+      seen.add(rel);
       const name = path.basename(rel);
       const dest = path.join(uploadDir, `${randomUUID()}${path.extname(name)}`);
       try {
@@ -93,12 +110,14 @@ export function importsRouter(db: Db, uploadDir: string, { audioExtractUrl }: Im
         try {
           const meta = await parseFile(dest, { duration: true });
           title = meta.common.title?.trim() || title;
+          if (wanted) title = wanted;
           artist = meta.common.artist?.trim() ?? '';
           album = meta.common.album?.trim() ?? '';
           duration = meta.format.duration ?? 0;
         } catch {
           // Unparseable tags: keep filename-derived title.
         }
+        if (wanted) title = wanted;
         const result = db
           .prepare('INSERT INTO tracks (title, artist, album, duration, mime_type, size, filename) VALUES (?, ?, ?, ?, ?, ?, ?)')
           .run(title, artist, album, duration, mimeType, size, path.basename(dest));

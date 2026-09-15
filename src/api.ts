@@ -52,10 +52,11 @@ export const api = {
   /** Which external sources the server can import from (AudioExtract results). */
   importSources: () => request<{ audioextract: boolean }>('/api/import/sources'),
   listAudioExtract: () => request<RemoteFile[]>('/api/import/audioextract'),
-  importFromAudioExtract: (paths: string[], playlistId?: number) =>
+  /** `title` overrides the tag/filename for that import. */
+  importFromAudioExtract: (items: { path: string; title?: string }[], playlistId?: number) =>
     request<{ imported: Track[]; failed: { path: string; error: string }[] }>(
       '/api/import/audioextract',
-      json('POST', { paths, playlistId: playlistId ?? null }),
+      json('POST', { items, playlistId: playlistId ?? null }),
     ),
 };
 
