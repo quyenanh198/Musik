@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { formatDuration } from '../api';
+import { api, formatDuration } from '../api';
 import { usePlayer } from '../player/PlayerProvider';
 
 const SLEEP_OPTIONS = [15, 30, 45, 60] as const;
@@ -55,6 +55,9 @@ export function PlayerBar() {
   return (
     <footer className="player">
       <div className="player__now">
+        {p.current && api.coverUrl(p.current) && (
+          <img className="player__cover" src={api.coverUrl(p.current) ?? undefined} alt="" />
+        )}
         {p.current ? (
           <>
             <div className="player__title" title={p.current.title}>

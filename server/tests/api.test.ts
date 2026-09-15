@@ -324,3 +324,53 @@ describe('import from AudioExtract', () => {
     expect(res.body.imported[0].title).toBe('Bài hát (bản chuẩn)');
   });
 });
+
+describe('metadata: year, genre, cover', () => {
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+    'base64',
+  );
+
+  it('edits year and genre, single and bulk', async () => {
+    const { body: a } = await uploadTrack('a.wav');
+    const { body: b } = await uploadTrack('b.wav');
+    expect(a).toMatchObject({ year: null, genre: '', cover: null });
+    const one = await request(app).patch(`/api/tracks/${a.id}`).send({ year: '1999', genre: ' Pop ' });
+    expect(one.body).toMatchObject({ year: 1999, genre: 'Pop' });
+    expect((await request(app).patch(`/api/tracks/${a.id}`).send({ year: 'abc' })).status).toBe(400);
+    const many = await request(app).patch('/api/tracks').send({ ids: [a.id, b.id], patch: { genre: 'Rock', year: null } });
+    expect(many.body.map((t: { genre: string; year: number | null }) => [t.genre, t.year])).toEqual([['Rock', null], ['Rock', null]]);
+  });
+
+  it('uploads, serves and removes a cover', async () => {
+    const { body: t } = await uploadTrack('c.wav');
+    expect((await request(app).get(`/api/tracks/${t.id}/cover`)).status).toBe(404);
+    const up = await request(app).post(`/api/tracks/${t.id}/cover`).attach('file', png, { filename: 'c.png', contentType: 'image/png' });
+    expect(up.status).toBe(200);
+    expect(up.body.cover).toMatch(/\.png$/);
+    const got = await request(app).get(`/api/tracks/${t.id}/cover`);
+    expect(got.status).toBe(200);
+    expect(got.headers['content-type']).toMatch(/image\/png/);
+    expect(readdirSync(path.join(dir, 'uploads', 'covers'))).toHaveLength(1);
+    const bad = await request(app).post(`/api/tracks/${t.id}/cover`).attach('file', Buffer.from('x'), { filename: 'x.txt', contentType: 'text/plain' });
+    expect(bad.status).toBe(415);
+    const del = await request(app).delete(`/api/tracks/${t.id}/cover`);
+    expect(del.body.cover).toBeNull();
+    expect(readdirSync(path.join(dir, 'uploads', 'covers'))).toHaveLength(0);
+  });
+
+  it('applies one cover to many tracks and cleans up on delete', async () => {
+    const { body: a } = await uploadTrack('a.wav');
+    const { body: b } = await uploadTrack('b.wav');
+    const res = await request(app)
+      .post('/api/tracks/cover')
+      .field('ids', JSON.stringify([a.id, b.id]))
+      .attach('file', png, { filename: 'art.png', contentType: 'image/png' });
+    expect(res.status).toBe(200);
+    expect(res.body.map((t: { cover: string | null }) => Boolean(t.cover))).toEqual([true, true]);
+    expect(readdirSync(path.join(dir, 'uploads', 'covers'))).toHaveLength(2);
+    await request(app).post('/api/tracks/delete').send({ ids: [a.id] });
+    await request(app).delete(`/api/tracks/${b.id}`);
+    expect(readdirSync(path.join(dir, 'uploads', 'covers'))).toHaveLength(0);
+  });
+});

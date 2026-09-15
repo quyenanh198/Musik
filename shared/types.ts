@@ -3,6 +3,10 @@ export interface Track {
   title: string;
   artist: string;
   album: string;
+  year: number | null;
+  genre: string;
+  /** Cover image file name (null when none); fetch via /api/tracks/:id/cover. */
+  cover: string | null;
   /** Seconds. 0 when unknown. */
   duration: number;
   mimeType: string;

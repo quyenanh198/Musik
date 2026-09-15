@@ -27,12 +27,24 @@ export const api = {
     form.append('file', file);
     return request<Track>('/api/tracks', { method: 'POST', body: form });
   },
-  updateTrack: (id: number, patch: Partial<Pick<Track, 'title' | 'artist' | 'album'>>) =>
-    request<Track>(`/api/tracks/${id}`, json('PATCH', patch)),
+  updateTrack: (id: number, patch: TrackPatch) => request<Track>(`/api/tracks/${id}`, json('PATCH', patch)),
+  uploadCover: (id: number, file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return request<Track>(`/api/tracks/${id}/cover`, { method: 'POST', body: form });
+  },
+  deleteCover: (id: number) => request<Track>(`/api/tracks/${id}/cover`, { method: 'DELETE' }),
+  /** One image for many tracks (album art). */
+  setCoverMany: (ids: number[], file: File) => {
+    const form = new FormData();
+    form.append('ids', JSON.stringify(ids));
+    form.append('file', file);
+    return request<Track[]>('/api/tracks/cover', { method: 'POST', body: form });
+  },
+  coverUrl: (track: Pick<Track, 'id' | 'cover'>) => (track.cover ? `/api/tracks/${track.id}/cover?v=${encodeURIComponent(track.cover)}` : null),
   deleteTrack: (id: number) => request<void>(`/api/tracks/${id}`, { method: 'DELETE' }),
   /** Same patch applied to many tracks; only the fields present are changed. */
-  updateTracks: (ids: number[], patch: Partial<Pick<Track, 'title' | 'artist' | 'album'>>) =>
-    request<Track[]>('/api/tracks', json('PATCH', { ids, patch })),
+  updateTracks: (ids: number[], patch: TrackPatch) => request<Track[]>('/api/tracks', json('PATCH', { ids, patch })),
   deleteTracks: (ids: number[]) => request<{ deleted: number }>('/api/tracks/delete', json('POST', { ids })),
   streamUrl: (id: number) => `/api/tracks/${id}/stream`,
 
@@ -59,6 +71,9 @@ export const api = {
       json('POST', { items, playlistId: playlistId ?? null }),
     ),
 };
+
+/** Editable tag fields; `year: null` clears it. */
+export type TrackPatch = Partial<Pick<Track, 'title' | 'artist' | 'album' | 'genre' | 'year'>>;
 
 export interface RemoteFile {
   path: string;

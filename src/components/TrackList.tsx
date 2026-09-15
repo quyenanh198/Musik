@@ -1,17 +1,20 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Playlist, Track } from '../../shared/types';
-import { formatDuration } from '../api';
+import { api, formatDuration, type TrackPatch } from '../api';
 import { usePlayer } from '../player/PlayerProvider';
 
-export type TrackPatch = Partial<Pick<Track, 'title' | 'artist' | 'album'>>;
+export type { TrackPatch };
+
+/** What to do with a track's cover image on save. */
+export type CoverChange = { kind: 'keep' } | { kind: 'remove' } | { kind: 'set'; file: File };
 
 interface Props {
   tracks: Track[];
   playlists: Playlist[];
   onAddToPlaylist: (playlistId: number, tracks: Track[]) => void;
-  onEdit: (track: Track, patch: Pick<Track, 'title' | 'artist' | 'album'>) => Promise<void>;
-  /** Apply the same artist/album to many tracks at once. */
-  onEditMany: (tracks: Track[], patch: TrackPatch) => Promise<void>;
+  onEdit: (track: Track, patch: TrackPatch, cover: CoverChange) => Promise<void>;
+  /** Apply the same tags (and optionally one cover) to many tracks at once. */
+  onEditMany: (tracks: Track[], patch: TrackPatch, cover: File | null) => Promise<void>;
   onDelete: (track: Track) => void;
   onDeleteMany: (tracks: Track[]) => void;
   /** Shown as a "remove" action when set (e.g. remove from playlist). */
@@ -33,7 +36,7 @@ export function TrackList({
   emptyMessage,
 }: Props) {
   const player = usePlayer();
-  const [editing, setEditing] = useState<number | null>(null);
+  const [editing, setEditing] = useState<Track | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkEditing, setBulkEditing] = useState(false);
 
@@ -111,9 +114,19 @@ export function TrackList({
         <BulkEditForm
           count={n}
           onCancel={() => setBulkEditing(false)}
-          onSave={async (patch) => {
-            await onEditMany(selectedTracks, patch);
+          onSave={async (patch, cover) => {
+            await onEditMany(selectedTracks, patch, cover);
             setBulkEditing(false);
+          }}
+        />
+      )}
+      {editing && (
+        <TrackEditor
+          track={editing}
+          onCancel={() => setEditing(null)}
+          onSave={async (patch, cover) => {
+            await onEdit(editing, patch, cover);
+            setEditing(null);
           }}
         />
       )}
@@ -134,17 +147,8 @@ export function TrackList({
           {tracks.map((track, i) => {
             const isCurrent = player.current?.id === track.id;
             const isSelected = selected.has(track.id);
-            return editing === track.id ? (
-              <EditRow
-                key={track.id}
-                track={track}
-                onCancel={() => setEditing(null)}
-                onSave={async (patch) => {
-                  await onEdit(track, patch);
-                  setEditing(null);
-                }}
-              />
-            ) : (
+            const cover = api.coverUrl(track);
+            return (
               <tr
                 key={track.id}
                 className={`tracks__row${isCurrent ? ' tracks__row--current' : ''}${isSelected ? ' tracks__row--selected' : ''}`}
@@ -163,10 +167,21 @@ export function TrackList({
                   </button>
                 </td>
                 <td>
-                  <div className="tracks__title">{track.title}</div>
-                  <div className="muted">{track.artist || 'Unknown artist'}</div>
+                  <div className="tracks__titlecell">
+                    {cover ? <img className="tracks__cover" src={cover} alt="" loading="lazy" /> : <div className="tracks__cover tracks__cover--none">♪</div>}
+                    <div className="tracks__text">
+                      <div className="tracks__title">{track.title}</div>
+                      <div className="muted">
+                        {track.artist || 'Unknown artist'}
+                        {track.year ? ` · ${track.year}` : ''}
+                      </div>
+                    </div>
+                  </div>
                 </td>
-                <td className="hide-sm muted">{track.album}</td>
+                <td className="hide-sm muted">
+                  {track.album}
+                  {track.genre && <div className="tracks__genre">{track.genre}</div>}
+                </td>
                 <td className="tracks__dur mono muted">{formatDuration(track.duration)}</td>
                 <td className="tracks__actions">
                   {playlists.length > 0 && (
@@ -186,7 +201,7 @@ export function TrackList({
                       ))}
                     </select>
                   )}
-                  <button className="icon" onClick={() => setEditing(track.id)} title="Edit">
+                  <button className="icon" onClick={() => setEditing(track)} title="Edit metadata">
                     ✎
                   </button>
                   {onRemove && (
@@ -207,33 +222,179 @@ export function TrackList({
   );
 }
 
+/** Pick an image file; returns a preview URL that is revoked on unmount. */
+function useCoverPick() {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const preview = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
+  useEffect(() => () => {
+    if (preview) URL.revokeObjectURL(preview);
+  }, [preview]);
+  const input = (
+    <input
+      ref={inputRef}
+      type="file"
+      accept="image/jpeg,image/png,image/webp,image/gif"
+      hidden
+      onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+    />
+  );
+  return { input, file, preview, choose: () => inputRef.current?.click(), reset: () => setFile(null) };
+}
+
+/** Full metadata editor for one track: tags + cover image. */
+function TrackEditor({
+  track,
+  onSave,
+  onCancel,
+}: {
+  track: Track;
+  onSave: (patch: TrackPatch, cover: CoverChange) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [title, setTitle] = useState(track.title);
+  const [artist, setArtist] = useState(track.artist);
+  const [album, setAlbum] = useState(track.album);
+  const [genre, setGenre] = useState(track.genre);
+  const [year, setYear] = useState(track.year ? String(track.year) : '');
+  const [removeCover, setRemoveCover] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const pick = useCoverPick();
+
+  const currentCover = api.coverUrl(track);
+  const shownCover = pick.preview ?? (removeCover ? null : currentCover);
+  const yearValid = year.trim() === '' || /^\d{1,4}$/.test(year.trim());
+
+  const submit = async () => {
+    if (!title.trim() || !yearValid) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const patch: TrackPatch = { title, artist, album, genre, year: year.trim() === '' ? null : Number(year) };
+      const cover: CoverChange = pick.file ? { kind: 'set', file: pick.file } : removeCover ? { kind: 'remove' } : { kind: 'keep' };
+      await onSave(patch, cover);
+    } catch (e) {
+      setError((e as Error).message);
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={saving ? undefined : onCancel}>
+      <form
+        className="modal editor"
+        role="dialog"
+        aria-label="Edit metadata"
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit();
+        }}
+      >
+        <div className="modal__head">
+          <strong>Edit metadata</strong>
+          <span className="muted editor__file">{formatDuration(track.duration)} · {track.mimeType}</span>
+        </div>
+        <div className="editor__body">
+          <div className="editor__coverbox">
+            {shownCover ? <img className="editor__cover" src={shownCover} alt="Cover" /> : <div className="editor__cover editor__cover--none">♪</div>}
+            {pick.input}
+            <div className="editor__coveractions">
+              <button className="btn btn--ghost" type="button" onClick={pick.choose} disabled={saving}>
+                {shownCover ? 'Change image' : 'Add image'}
+              </button>
+              {shownCover && (
+                <button
+                  className="btn btn--ghost btn--danger"
+                  type="button"
+                  disabled={saving}
+                  onClick={() => {
+                    pick.reset();
+                    setRemoveCover(true);
+                  }}
+                >
+                  Remove
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="editor__fields">
+            <label className="editor__field editor__field--wide">
+              <span>Title</span>
+              <input value={title} onChange={(e) => setTitle(e.target.value)} required autoFocus />
+            </label>
+            <label className="editor__field">
+              <span>Artist</span>
+              <input value={artist} onChange={(e) => setArtist(e.target.value)} />
+            </label>
+            <label className="editor__field">
+              <span>Album</span>
+              <input value={album} onChange={(e) => setAlbum(e.target.value)} />
+            </label>
+            <label className="editor__field">
+              <span>Genre</span>
+              <input value={genre} onChange={(e) => setGenre(e.target.value)} placeholder="Pop, Rock, Ballad…" />
+            </label>
+            <label className="editor__field">
+              <span>Year</span>
+              <input value={year} onChange={(e) => setYear(e.target.value)} inputMode="numeric" placeholder="2024" className={yearValid ? '' : 'input--bad'} />
+            </label>
+          </div>
+        </div>
+        {error && <p className="error editor__error">{error}</p>}
+        <div className="modal__foot">
+          <button className="btn btn--ghost" type="button" onClick={onCancel} disabled={saving}>
+            Cancel
+          </button>
+          <button className="btn" type="submit" disabled={saving || !title.trim() || !yearValid}>
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function BulkEditForm({
   count,
   onSave,
   onCancel,
 }: {
   count: number;
-  onSave: (patch: TrackPatch) => Promise<void>;
+  onSave: (patch: TrackPatch, cover: File | null) => Promise<void>;
   onCancel: () => void;
 }) {
   const [artist, setArtist] = useState('');
   const [album, setAlbum] = useState('');
-  const [setArtistOn, setSetArtistOn] = useState(true);
-  const [setAlbumOn, setSetAlbumOn] = useState(false);
+  const [genre, setGenre] = useState('');
+  const [year, setYear] = useState('');
+  const [on, setOn] = useState({ artist: true, album: false, genre: false, year: false });
   const [saving, setSaving] = useState(false);
-  const nothing = !setArtistOn && !setAlbumOn;
+  const pick = useCoverPick();
+  const yearValid = year.trim() === '' || /^\d{1,4}$/.test(year.trim());
+  const nothing = !on.artist && !on.album && !on.genre && !on.year && !pick.file;
 
   const submit = async () => {
     setSaving(true);
     try {
       const patch: TrackPatch = {};
-      if (setArtistOn) patch.artist = artist;
-      if (setAlbumOn) patch.album = album;
-      await onSave(patch);
+      if (on.artist) patch.artist = artist;
+      if (on.album) patch.album = album;
+      if (on.genre) patch.genre = genre;
+      if (on.year) patch.year = year.trim() === '' ? null : Number(year);
+      await onSave(patch, pick.file);
     } finally {
       setSaving(false);
     }
   };
+
+  const field = (key: keyof typeof on, value: string, set: (v: string) => void, placeholder: string, extra?: object) => (
+    <label className="bulk-edit__field">
+      <input type="checkbox" checked={on[key]} onChange={(e) => setOn((o) => ({ ...o, [key]: e.target.checked }))} aria-label={`Change ${key}`} />
+      <input value={value} onChange={(e) => set(e.target.value)} placeholder={placeholder} aria-label={placeholder} disabled={!on[key]} {...extra} />
+    </label>
+  );
 
   return (
     <form
@@ -245,15 +406,23 @@ function BulkEditForm({
     >
       <div className="muted">Edit {count} tracks — only ticked fields change; an empty value clears that field.</div>
       <div className="bulk-edit__row">
-        <label className="bulk-edit__field">
-          <input type="checkbox" checked={setArtistOn} onChange={(e) => setSetArtistOn(e.target.checked)} aria-label="Change artist" />
-          <input value={artist} onChange={(e) => setArtist(e.target.value)} placeholder="Artist" aria-label="Artist" disabled={!setArtistOn} />
-        </label>
-        <label className="bulk-edit__field">
-          <input type="checkbox" checked={setAlbumOn} onChange={(e) => setSetAlbumOn(e.target.checked)} aria-label="Change album" />
-          <input value={album} onChange={(e) => setAlbum(e.target.value)} placeholder="Album" aria-label="Album" disabled={!setAlbumOn} />
-        </label>
-        <button className="btn" type="submit" disabled={saving || nothing}>
+        {field('artist', artist, setArtist, 'Artist')}
+        {field('album', album, setAlbum, 'Album')}
+        {field('genre', genre, setGenre, 'Genre')}
+        {field('year', year, setYear, 'Year', { inputMode: 'numeric', className: yearValid ? '' : 'input--bad' })}
+      </div>
+      <div className="bulk-edit__row">
+        {pick.input}
+        <button className="btn btn--ghost" type="button" onClick={pick.choose} disabled={saving}>
+          🖼 {pick.file ? `Cover: ${pick.file.name}` : 'Set one cover for all'}
+        </button>
+        {pick.file && (
+          <button className="btn btn--ghost" type="button" onClick={pick.reset} disabled={saving}>
+            ✕
+          </button>
+        )}
+        <span style={{ flex: 1 }} />
+        <button className="btn" type="submit" disabled={saving || nothing || !yearValid}>
           Save {count}
         </button>
         <button className="btn btn--ghost" type="button" onClick={onCancel} disabled={saving}>
@@ -261,51 +430,5 @@ function BulkEditForm({
         </button>
       </div>
     </form>
-  );
-}
-
-function EditRow({
-  track,
-  onSave,
-  onCancel,
-}: {
-  track: Track;
-  onSave: (patch: Pick<Track, 'title' | 'artist' | 'album'>) => Promise<void>;
-  onCancel: () => void;
-}) {
-  const [title, setTitle] = useState(track.title);
-  const [artist, setArtist] = useState(track.artist);
-  const [album, setAlbum] = useState(track.album);
-  const [saving, setSaving] = useState(false);
-
-  const submit = async () => {
-    setSaving(true);
-    try {
-      await onSave({ title, artist, album });
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <tr className="tracks__row tracks__row--editing">
-      <td className="tracks__check"></td>
-      <td className="tracks__num"></td>
-      <td colSpan={3}>
-        <div className="edit">
-          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title" aria-label="Title" />
-          <input value={artist} onChange={(e) => setArtist(e.target.value)} placeholder="Artist" aria-label="Artist" />
-          <input value={album} onChange={(e) => setAlbum(e.target.value)} placeholder="Album" aria-label="Album" />
-        </div>
-      </td>
-      <td className="tracks__actions">
-        <button className="btn" onClick={submit} disabled={saving || !title.trim()}>
-          Save
-        </button>
-        <button className="btn btn--ghost" onClick={onCancel} disabled={saving}>
-          Cancel
-        </button>
-      </td>
-    </tr>
   );
 }

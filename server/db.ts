@@ -27,14 +27,23 @@ CREATE TABLE IF NOT EXISTS playlist_tracks (
 
 export type Db = DatabaseSync;
 
+// Columns added after the first release; applied to older databases on open.
+const MIGRATIONS: Array<[column: string, ddl: string]> = [
+  ['year', 'ALTER TABLE tracks ADD COLUMN year INTEGER'],
+  ['genre', "ALTER TABLE tracks ADD COLUMN genre TEXT NOT NULL DEFAULT ''"],
+  ['cover', 'ALTER TABLE tracks ADD COLUMN cover TEXT'],
+];
+
 export function openDb(path: string): Db {
   const db = new DatabaseSync(path);
   db.exec('PRAGMA foreign_keys = ON');
   db.exec(SCHEMA);
+  const have = new Set((db.prepare('PRAGMA table_info(tracks)').all() as { name: string }[]).map((c) => c.name));
+  for (const [column, ddl] of MIGRATIONS) if (!have.has(column)) db.exec(ddl);
   return db;
 }
 
 export const TRACK_COLUMNS = `
-  id, title, artist, album, duration,
+  id, title, artist, album, year, genre, cover, duration,
   mime_type AS mimeType, size, created_at AS createdAt
 `;

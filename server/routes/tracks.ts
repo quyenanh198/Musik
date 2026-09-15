@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import multer from 'multer';
-import { parseFile } from 'music-metadata';
 import { randomUUID } from 'node:crypto';
 import { unlink } from 'node:fs/promises';
 import path from 'node:path';
+import { COVER_TYPES, MAX_COVER_BYTES, readTags, removeCover, saveCover } from '../metadata.js';
 import type { Db } from '../db.js';
 import { TRACK_COLUMNS } from '../db.js';
 import type { Track } from '../../shared/types.js';
@@ -18,8 +18,32 @@ export function fixFilename(name: string): string {
   return decoded.includes('\ufffd') ? name : decoded;
 }
 
+/** Where per-track cover images live (next to the audio files). */
+export const coverDirOf = (uploadDir: string) => path.join(uploadDir, 'covers');
+
+/** Editable text/number fields, as sent by the client. */
+type TrackPatch = Partial<Pick<Track, 'title' | 'artist' | 'album' | 'genre' | 'year'>>;
+
+const readYear = (raw: unknown): number | null | undefined => {
+  if (raw === undefined) return undefined;
+  if (raw === null || raw === '') return null;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0 || n > 9999) throw new HttpError(400, 'Invalid year');
+  return n;
+};
+
 export function tracksRouter(db: Db, uploadDir: string): Router {
   const router = Router();
+  const coverDir = coverDirOf(uploadDir);
+
+  const coverUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: MAX_COVER_BYTES },
+    fileFilter: (_req, file, cb) => {
+      if (COVER_TYPES[file.mimetype.toLowerCase()]) cb(null, true);
+      else cb(new HttpError(415, 'Cover must be a JPEG, PNG, WebP or GIF image'));
+    },
+  });
 
   const upload = multer({
     storage: multer.diskStorage({
@@ -34,7 +58,7 @@ export function tracksRouter(db: Db, uploadDir: string): Router {
   });
 
   const selectOne = db.prepare(`SELECT ${TRACK_COLUMNS} FROM tracks WHERE id = ?`);
-  const selectFile = db.prepare('SELECT filename, mime_type AS mimeType FROM tracks WHERE id = ?');
+  const selectFile = db.prepare('SELECT filename, mime_type AS mimeType, cover FROM tracks WHERE id = ?');
 
   const getTrack = (id: string): Track => {
     const track = selectOne.get(Number(id)) as Track | undefined;
@@ -52,25 +76,14 @@ export function tracksRouter(db: Db, uploadDir: string): Router {
 
     // Trình duyệt gửi tên file multipart bằng UTF-8 nhưng busboy/multer giải mã theo
     // latin1, nên tên tiếng Việt/tiếng Trung thành "Chuyá»n hoÃ¡..." — đọc lại đúng mã.
-    let title = path.parse(fixFilename(file.originalname)).name;
-    let artist = '';
-    let album = '';
-    let duration = 0;
-    try {
-      const meta = await parseFile(file.path, { duration: true });
-      title = meta.common.title?.trim() || title;
-      artist = meta.common.artist?.trim() ?? '';
-      album = meta.common.album?.trim() ?? '';
-      duration = meta.format.duration ?? 0;
-    } catch {
-      // Unparseable tags: keep filename-derived title.
-    }
+    const tags = await readTags(file.path, path.parse(fixFilename(file.originalname)).name);
+    const cover = tags.picture ? await saveCover(coverDir, tags.picture.data, tags.picture.format) : null;
 
     const result = db
       .prepare(
-        'INSERT INTO tracks (title, artist, album, duration, mime_type, size, filename) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO tracks (title, artist, album, year, genre, cover, duration, mime_type, size, filename) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(title, artist, album, duration, file.mimetype, file.size, file.filename);
+      .run(tags.title, tags.artist, tags.album, tags.year, tags.genre, cover, tags.duration, file.mimetype, file.size, file.filename);
     res.status(201).json(getTrack(String(result.lastInsertRowid)));
   });
 
@@ -81,15 +94,18 @@ export function tracksRouter(db: Db, uploadDir: string): Router {
     return [...new Set(ids)];
   };
 
-  /** Bulk edit: `{ ids, patch: { title?, artist?, album? } }` — only the fields present are changed, on every id. */
+  /** Bulk edit: `{ ids, patch: { title?, artist?, album?, genre?, year? } }` — only the fields present are changed, on every id. */
   router.patch('/', (req, res) => {
     const ids = readIds(req.body);
-    const patch = ((req.body as { patch?: unknown }).patch ?? {}) as Partial<Pick<Track, 'title' | 'artist' | 'album'>>;
+    const patch = ((req.body as { patch?: unknown }).patch ?? {}) as TrackPatch;
     const sets: string[] = [];
-    const values: string[] = [];
+    const values: (string | number | null)[] = [];
     if (typeof patch.title === 'string' && patch.title.trim()) { sets.push('title = ?'); values.push(patch.title.trim()); }
     if (typeof patch.artist === 'string') { sets.push('artist = ?'); values.push(patch.artist.trim()); }
     if (typeof patch.album === 'string') { sets.push('album = ?'); values.push(patch.album.trim()); }
+    if (typeof patch.genre === 'string') { sets.push('genre = ?'); values.push(patch.genre.trim()); }
+    const year = readYear(patch.year);
+    if (year !== undefined) { sets.push('year = ?'); values.push(year); }
     if (sets.length === 0) throw new HttpError(400, 'Nothing to update');
     const update = db.prepare(`UPDATE tracks SET ${sets.join(', ')} WHERE id = ?`);
     db.exec('BEGIN');
@@ -108,14 +124,41 @@ export function tracksRouter(db: Db, uploadDir: string): Router {
   router.post('/delete', async (req, res) => {
     const ids = readIds(req.body);
     const files: string[] = [];
+    const covers: (string | null)[] = [];
     for (const id of ids) {
-      const row = selectFile.get(id) as { filename: string } | undefined;
+      const row = selectFile.get(id) as { filename: string; cover: string | null } | undefined;
       if (!row) continue;
       db.prepare('DELETE FROM tracks WHERE id = ?').run(id);
       files.push(row.filename);
+      covers.push(row.cover);
     }
-    await Promise.all(files.map((f) => unlink(path.join(uploadDir, f)).catch(() => {})));
+    await Promise.all([
+      ...files.map((f) => unlink(path.join(uploadDir, f)).catch(() => {})),
+      ...covers.map((c) => removeCover(coverDir, c)),
+    ]);
     res.json({ deleted: files.length });
+  });
+
+  /** Same cover image for many tracks (album art): multipart `file` + `ids` (JSON array). */
+  router.post('/cover', coverUpload.single('file'), async (req, res) => {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(String((req.body as { ids?: string }).ids ?? '[]'));
+    } catch {
+      throw new HttpError(400, '"ids" must be a JSON array');
+    }
+    const ids = readIds({ ids: raw });
+    if (!req.file) throw new HttpError(400, 'Missing "file" field');
+    const updated: Track[] = [];
+    for (const id of ids) {
+      const row = selectFile.get(id) as { cover: string | null } | undefined;
+      if (!row) continue;
+      const name = await saveCover(coverDir, req.file.buffer, req.file.mimetype);
+      db.prepare('UPDATE tracks SET cover = ? WHERE id = ?').run(name, id);
+      await removeCover(coverDir, row.cover);
+      updated.push(getTrack(String(id)));
+    }
+    res.json(updated);
   });
 
   router.get('/:id', (req, res) => {
@@ -124,27 +167,56 @@ export function tracksRouter(db: Db, uploadDir: string): Router {
 
   router.patch('/:id', (req, res) => {
     const current = getTrack(req.params.id);
-    const body = req.body as Partial<Pick<Track, 'title' | 'artist' | 'album'>>;
+    const body = req.body as TrackPatch;
+    const year = readYear(body.year);
     const next = {
       title: typeof body.title === 'string' && body.title.trim() ? body.title.trim() : current.title,
       artist: typeof body.artist === 'string' ? body.artist.trim() : current.artist,
       album: typeof body.album === 'string' ? body.album.trim() : current.album,
+      genre: typeof body.genre === 'string' ? body.genre.trim() : current.genre,
+      year: year === undefined ? current.year : year,
     };
-    db.prepare('UPDATE tracks SET title = ?, artist = ?, album = ? WHERE id = ?').run(
+    db.prepare('UPDATE tracks SET title = ?, artist = ?, album = ?, genre = ?, year = ? WHERE id = ?').run(
       next.title,
       next.artist,
       next.album,
+      next.genre,
+      next.year,
       current.id,
     );
     res.json(getTrack(req.params.id));
   });
 
   router.delete('/:id', async (req, res) => {
-    const row = selectFile.get(Number(req.params.id)) as { filename: string } | undefined;
+    const row = selectFile.get(Number(req.params.id)) as { filename: string; cover: string | null } | undefined;
     if (!row) throw new HttpError(404, 'Track not found');
     db.prepare('DELETE FROM tracks WHERE id = ?').run(Number(req.params.id));
     await unlink(path.join(uploadDir, row.filename)).catch(() => {});
+    await removeCover(coverDir, row.cover);
     res.status(204).end();
+  });
+
+  router.get('/:id/cover', (req, res) => {
+    const row = selectFile.get(Number(req.params.id)) as { cover: string | null } | undefined;
+    if (!row) throw new HttpError(404, 'Track not found');
+    if (!row.cover) throw new HttpError(404, 'No cover');
+    res.sendFile(row.cover, { root: coverDir, headers: { 'Cache-Control': 'public, max-age=31536000, immutable' } });
+  });
+
+  router.post('/:id/cover', coverUpload.single('file'), async (req, res) => {
+    const current = getTrack(String(req.params.id));
+    if (!req.file) throw new HttpError(400, 'Missing "file" field');
+    const name = await saveCover(coverDir, req.file.buffer, req.file.mimetype);
+    db.prepare('UPDATE tracks SET cover = ? WHERE id = ?').run(name, current.id);
+    await removeCover(coverDir, current.cover);
+    res.json(getTrack(String(current.id)));
+  });
+
+  router.delete('/:id/cover', async (req, res) => {
+    const current = getTrack(String(req.params.id));
+    db.prepare('UPDATE tracks SET cover = NULL WHERE id = ?').run(current.id);
+    await removeCover(coverDir, current.cover);
+    res.json(getTrack(String(current.id)));
   });
 
   // res.sendFile handles Range requests, so seeking works in the browser.

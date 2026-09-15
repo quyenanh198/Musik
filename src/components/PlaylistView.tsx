@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Playlist, PlaylistDetail, Track } from '../../shared/types';
 import { api } from '../api';
 import { usePlayer } from '../player/PlayerProvider';
-import { TrackList, type TrackPatch } from './TrackList';
+import { TrackList, type CoverChange, type TrackPatch } from './TrackList';
 import { UploadButton } from './UploadButton';
 import { ImportPicker } from './ImportPicker';
 
@@ -18,8 +18,8 @@ interface Props {
   canImport: boolean;
   onDeleted: () => void;
   onAddToPlaylist: (playlistId: number, tracks: Track[]) => Promise<void>;
-  onEdit: (track: Track, patch: Pick<Track, 'title' | 'artist' | 'album'>) => Promise<void>;
-  onEditMany: (tracks: Track[], patch: TrackPatch) => Promise<void>;
+  onEdit: (track: Track, patch: TrackPatch, cover: CoverChange) => Promise<void>;
+  onEditMany: (tracks: Track[], patch: TrackPatch, cover: File | null) => Promise<void>;
   onDelete: (track: Track) => void;
   onDeleteMany: (tracks: Track[]) => void;
   notify: (message: string) => void;

@@ -4,7 +4,7 @@ import { api } from './api';
 import { Library } from './components/Library';
 import { PlayerBar } from './components/PlayerBar';
 import { PlaylistView } from './components/PlaylistView';
-import type { TrackPatch } from './components/TrackList';
+import type { CoverChange, TrackPatch } from './components/TrackList';
 import { usePlayer } from './player/PlayerProvider';
 
 type View = { kind: 'library' } | { kind: 'playlist'; id: number };
@@ -79,13 +79,13 @@ export function App() {
     }
   };
 
-  const editMany = async (toEdit: Track[], patch: TrackPatch) => {
+  const editMany = async (toEdit: Track[], patch: TrackPatch, cover: File | null) => {
     if (toEdit.length === 0) return;
     try {
-      const updated = await api.updateTracks(
-        toEdit.map((t) => t.id),
-        patch,
-      );
+      const ids = toEdit.map((t) => t.id);
+      let updated: Track[] = [];
+      if (Object.keys(patch).length > 0) updated = await api.updateTracks(ids, patch);
+      if (cover) updated = await api.setCoverMany(ids, cover);
       updated.forEach((t) => player.updateTrack(t));
       refreshTracks();
       notify(`Updated ${updated.length} tracks`);
@@ -108,14 +108,13 @@ export function App() {
     }
   };
 
-  const editTrack = async (track: Track, patch: Pick<Track, 'title' | 'artist' | 'album'>) => {
-    try {
-      const updated = await api.updateTrack(track.id, patch);
-      player.updateTrack(updated);
-      refreshTracks();
-    } catch (e) {
-      notify((e as Error).message);
-    }
+  // Editor errors propagate so the dialog can show them and stay open.
+  const editTrack = async (track: Track, patch: TrackPatch, cover: CoverChange) => {
+    let updated = await api.updateTrack(track.id, patch);
+    if (cover.kind === 'set') updated = await api.uploadCover(track.id, cover.file);
+    else if (cover.kind === 'remove') updated = await api.deleteCover(track.id);
+    player.updateTrack(updated);
+    refreshTracks();
   };
 
   const deleteTrack = async (track: Track) => {

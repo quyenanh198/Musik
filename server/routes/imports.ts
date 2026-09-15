@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import { parseFile } from 'music-metadata';
 import { randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { stat, unlink } from 'node:fs/promises';
@@ -11,6 +10,8 @@ import { TRACK_COLUMNS } from '../db.js';
 import type { Track } from '../../shared/types.js';
 import { HttpError } from '../errors.js';
 import { addTracksToPlaylist } from './playlists.js';
+import { readTags, saveCover } from '../metadata.js';
+import { coverDirOf } from './tracks.js';
 
 export interface ImportOptions {
   /** Base URL of the AudioExtract server (docker network), e.g. http://audioextract:3000. */
@@ -50,6 +51,7 @@ export function importsRouter(db: Db, uploadDir: string, { audioExtractUrl }: Im
   };
 
   const encodePath = (p: string) => p.split('/').map(encodeURIComponent).join('/');
+  const coverDir = coverDirOf(uploadDir);
   const selectOne = db.prepare(`SELECT ${TRACK_COLUMNS} FROM tracks WHERE id = ?`);
 
   router.get('/sources', (_req, res) => {
@@ -103,24 +105,14 @@ export function importsRouter(db: Db, uploadDir: string, { audioExtractUrl }: Im
         await pipeline(Readable.fromWeb(upstream.body as never), createWriteStream(dest));
         const { size } = await stat(dest);
 
-        let title = path.parse(name).name;
-        let artist = '';
-        let album = '';
-        let duration = 0;
-        try {
-          const meta = await parseFile(dest, { duration: true });
-          title = meta.common.title?.trim() || title;
-          if (wanted) title = wanted;
-          artist = meta.common.artist?.trim() ?? '';
-          album = meta.common.album?.trim() ?? '';
-          duration = meta.format.duration ?? 0;
-        } catch {
-          // Unparseable tags: keep filename-derived title.
-        }
-        if (wanted) title = wanted;
+        const tags = await readTags(dest, path.parse(name).name);
+        const title = wanted ?? tags.title;
+        const cover = tags.picture ? await saveCover(coverDir, tags.picture.data, tags.picture.format) : null;
         const result = db
-          .prepare('INSERT INTO tracks (title, artist, album, duration, mime_type, size, filename) VALUES (?, ?, ?, ?, ?, ?, ?)')
-          .run(title, artist, album, duration, mimeType, size, path.basename(dest));
+          .prepare(
+            'INSERT INTO tracks (title, artist, album, year, genre, cover, duration, mime_type, size, filename) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          )
+          .run(title, tags.artist, tags.album, tags.year, tags.genre, cover, tags.duration, mimeType, size, path.basename(dest));
         imported.push(selectOne.get(Number(result.lastInsertRowid)) as unknown as Track);
       } catch (e) {
         await unlink(dest).catch(() => {});

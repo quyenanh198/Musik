@@ -263,10 +263,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             title: current.title,
             artist: current.artist || 'Musik',
             album: current.album,
-            artwork: [
-              { src: `${location.origin}/icon-192.png`, sizes: '192x192', type: 'image/png' },
-              { src: `${location.origin}/icon-512.png`, sizes: '512x512', type: 'image/png' },
-            ],
+            artwork: current.cover
+              ? [{ src: `${location.origin}${api.coverUrl(current)}`, sizes: '512x512' }]
+              : [
+                  { src: `${location.origin}/icon-192.png`, sizes: '192x192', type: 'image/png' },
+                  { src: `${location.origin}/icon-512.png`, sizes: '512x512', type: 'image/png' },
+                ],
           })
         : null;
     };
