@@ -11,6 +11,13 @@ import { HttpError } from '../errors.js';
 
 const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
 
+/** Re-decode a multipart filename that was read as latin1 but was sent as UTF-8. */
+export function fixFilename(name: string): string {
+  if (!/[\u0080-\u00ff]/.test(name)) return name;
+  const decoded = Buffer.from(name, 'latin1').toString('utf8');
+  return decoded.includes('\ufffd') ? name : decoded;
+}
+
 export function tracksRouter(db: Db, uploadDir: string): Router {
   const router = Router();
 
@@ -43,7 +50,9 @@ export function tracksRouter(db: Db, uploadDir: string): Router {
     const file = req.file;
     if (!file) throw new HttpError(400, 'Missing "file" field');
 
-    let title = path.parse(file.originalname).name;
+    // Trình duyệt gửi tên file multipart bằng UTF-8 nhưng busboy/multer giải mã theo
+    // latin1, nên tên tiếng Việt/tiếng Trung thành "Chuyá»n hoÃ¡..." — đọc lại đúng mã.
+    let title = path.parse(fixFilename(file.originalname)).name;
     let artist = '';
     let album = '';
     let duration = 0;

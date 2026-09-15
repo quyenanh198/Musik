@@ -1,3 +1,4 @@
+import { fixFilename } from '../routes/tracks.js';
 import { mkdtempSync, rmSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -171,5 +172,17 @@ describe('misc', () => {
 
   it('creates the upload dir', () => {
     expect(existsSync(path.join(dir, 'uploads'))).toBe(true);
+  });
+});
+
+describe('fixFilename', () => {
+  it('re-decodes UTF-8 filenames that multer read as latin1', () => {
+    const utf8 = 'Chuyện hoài tấn gác bấng.mp3';
+    const mangled = Buffer.from(utf8, 'utf8').toString('latin1');
+    expect(fixFilename(mangled)).toBe(utf8);
+  });
+  it('leaves plain ASCII and genuine latin1 names alone', () => {
+    expect(fixFilename('song.mp3')).toBe('song.mp3');
+    expect(fixFilename('caf\u00e9.mp3')).toBe('caf\u00e9.mp3');
   });
 });
