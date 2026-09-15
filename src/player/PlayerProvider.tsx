@@ -247,27 +247,37 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     ms.setActionHandler('seekto', (d) => {
       if (d.seekTime != null) seek(d.seekTime);
     });
-    ms.setActionHandler('seekbackward', (d) => seek(Math.max(0, audio.currentTime - (d.seekOffset ?? 10))));
-    ms.setActionHandler('seekforward', (d) =>
-      seek(Math.min(audio.duration || 0, audio.currentTime + (d.seekOffset ?? 10))),
-    );
+    // No seekbackward/seekforward: iOS then shows ±10s buttons *instead of* previous/next.
     return () => {
-      for (const action of ['play', 'pause', 'previoustrack', 'nexttrack', 'seekto', 'seekbackward', 'seekforward'] as const)
-        ms.setActionHandler(action, null);
+      for (const action of ['play', 'pause', 'previoustrack', 'nexttrack', 'seekto'] as const) ms.setActionHandler(action, null);
     };
   }, [audio, next, prev, seek]);
 
+  // Lock-screen metadata. iOS only picks it up once its Now Playing session exists (i.e. after
+  // playback actually starts) and ignores SVG artwork, so re-apply on every `playing` with PNGs.
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
-    navigator.mediaSession.metadata = current
-      ? new MediaMetadata({
-          title: current.title,
-          artist: current.artist,
-          album: current.album,
-          artwork: [{ src: '/icon.svg', sizes: 'any', type: 'image/svg+xml' }],
-        })
-      : null;
-  }, [current]);
+    const apply = () => {
+      navigator.mediaSession.metadata = current
+        ? new MediaMetadata({
+            title: current.title,
+            artist: current.artist || 'Musik',
+            album: current.album,
+            artwork: [
+              { src: `${location.origin}/icon-192.png`, sizes: '192x192', type: 'image/png' },
+              { src: `${location.origin}/icon-512.png`, sizes: '512x512', type: 'image/png' },
+            ],
+          })
+        : null;
+    };
+    apply();
+    audio.addEventListener('playing', apply);
+    audio.addEventListener('loadedmetadata', apply);
+    return () => {
+      audio.removeEventListener('playing', apply);
+      audio.removeEventListener('loadedmetadata', apply);
+    };
+  }, [audio, current]);
 
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
