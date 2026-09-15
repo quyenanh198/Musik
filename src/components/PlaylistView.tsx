@@ -4,6 +4,7 @@ import { api } from '../api';
 import { usePlayer } from '../player/PlayerProvider';
 import { TrackList, type TrackPatch } from './TrackList';
 import { UploadButton } from './UploadButton';
+import { ImportPicker } from './ImportPicker';
 
 interface Props {
   id: number;
@@ -14,6 +15,7 @@ interface Props {
   version: number;
   onPlaylistsChanged: () => void;
   onTracksChanged: () => void;
+  canImport: boolean;
   onDeleted: () => void;
   onAddToPlaylist: (playlistId: number, tracks: Track[]) => Promise<void>;
   onEdit: (track: Track, patch: Pick<Track, 'title' | 'artist' | 'album'>) => Promise<void>;
@@ -30,6 +32,7 @@ export function PlaylistView({
   version,
   onPlaylistsChanged,
   onTracksChanged,
+  canImport,
   onDeleted,
   onAddToPlaylist,
   onEdit,
@@ -44,6 +47,7 @@ export function PlaylistView({
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState('');
   const [picking, setPicking] = useState(false);
+  const [importing, setImporting] = useState(false);
 
   const load = useCallback(() => {
     api
@@ -140,6 +144,11 @@ export function PlaylistView({
             + Add from library
           </button>
           <UploadButton onUploaded={(t, done) => void uploadedHere(t, done)} label="⬆ Upload here" />
+          {canImport && (
+            <button className="btn btn--ghost" onClick={() => setImporting(true)}>
+              ⤓ From AudioExtract
+            </button>
+          )}
           <button
             className="btn btn--ghost"
             onClick={() => {
@@ -154,6 +163,20 @@ export function PlaylistView({
           </button>
         </div>
       </header>
+      {importing && (
+        <ImportPicker
+          playlistId={id}
+          playlistName={detail.name}
+          onClose={() => setImporting(false)}
+          onDone={(imported, failed) => {
+            setImporting(false);
+            load();
+            onTracksChanged();
+            onPlaylistsChanged();
+            notify(`Imported ${imported.length} tracks into ${detail.name}${failed.length ? `, ${failed.length} failed` : ''}`);
+          }}
+        />
+      )}
       {picking && (
         <LibraryPicker
           library={library}

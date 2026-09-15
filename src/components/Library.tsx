@@ -3,11 +3,15 @@ import type { Playlist, Track } from '../../shared/types';
 import { usePlayer } from '../player/PlayerProvider';
 import { TrackList, type TrackPatch } from './TrackList';
 import { UploadButton } from './UploadButton';
+import { ImportPicker } from './ImportPicker';
 
 interface Props {
   tracks: Track[];
   playlists: Playlist[];
   onRefresh: () => void;
+  /** AudioExtract results can be pulled in (server has AUDIOEXTRACT_URL). */
+  canImport: boolean;
+  notify: (message: string) => void;
   onAddToPlaylist: (playlistId: number, tracks: Track[]) => void;
   onEdit: (track: Track, patch: Pick<Track, 'title' | 'artist' | 'album'>) => Promise<void>;
   onEditMany: (tracks: Track[], patch: TrackPatch) => Promise<void>;
@@ -15,9 +19,10 @@ interface Props {
   onDeleteMany: (tracks: Track[]) => void;
 }
 
-export function Library({ tracks, playlists, onRefresh, onAddToPlaylist, onEdit, onEditMany, onDelete, onDeleteMany }: Props) {
+export function Library({ tracks, playlists, onRefresh, canImport, notify, onAddToPlaylist, onEdit, onEditMany, onDelete, onDeleteMany }: Props) {
   const player = usePlayer();
   const [query, setQuery] = useState('');
+  const [importing, setImporting] = useState(false);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -41,7 +46,22 @@ export function Library({ tracks, playlists, onRefresh, onAddToPlaylist, onEdit,
           ⇄ Shuffle
         </button>
         <UploadButton onUploaded={onRefresh} />
+        {canImport && (
+          <button className="btn btn--ghost" onClick={() => setImporting(true)}>
+            ⤓ From AudioExtract
+          </button>
+        )}
       </header>
+      {importing && (
+        <ImportPicker
+          onClose={() => setImporting(false)}
+          onDone={(imported, failed) => {
+            setImporting(false);
+            onRefresh();
+            notify(`Imported ${imported.length} tracks${failed.length ? `, ${failed.length} failed` : ''}`);
+          }}
+        />
+      )}
       <TrackList
         tracks={filtered}
         playlists={playlists}

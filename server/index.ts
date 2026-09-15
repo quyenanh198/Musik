@@ -10,6 +10,7 @@ const app = createApp({
   dbPath: path.join(dataDir, 'musik.db'),
   uploadDir: path.join(dataDir, 'uploads'),
   staticDir: process.env.NODE_ENV === 'production' ? path.join(root, 'dist') : undefined,
+  audioExtractUrl: process.env.AUDIOEXTRACT_URL || undefined,
 });
 
 app.listen(port, () => {

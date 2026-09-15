@@ -2,6 +2,9 @@ import { fixFilename } from '../routes/tracks.js';
 import { mkdtempSync, rmSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import express from 'express';
+import type { Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../app.js';
@@ -249,5 +252,66 @@ describe('batch operations', () => {
     const list = await request(app).get('/api/tracks');
     expect(list.body.map((t: { id: number }) => t.id)).toEqual([b.id]);
     expect(readdirSync(path.join(dir, 'uploads'))).toHaveLength(1);
+  });
+});
+
+describe('import from AudioExtract', () => {
+  let stub: Server;
+  let stubUrl: string;
+
+  beforeEach(async () => {
+    const ae = express();
+    ae.get('/api/files', (_req, res) =>
+      res.json([
+        { path: 't1/Bài hát.wav', name: 'Bài hát.wav', size: makeWav(1).length, updatedAt: '2026-01-01T00:00:00.000Z' },
+        { path: 't2/notes.txt', name: 'notes.txt', size: 5, updatedAt: '2026-01-01T00:00:00.000Z' },
+      ]),
+    );
+    ae.get('/api/files/t1/B%C3%A0i%20h%C3%A1t.wav', (_req, res) => res.type('audio/wav').send(makeWav(1)));
+    ae.get('/api/files/t2/notes.txt', (_req, res) => res.type('text/plain').send('hello'));
+    await new Promise<void>((resolve) => {
+      stub = ae.listen(0, '127.0.0.1', () => resolve());
+    });
+    stubUrl = `http://127.0.0.1:${(stub.address() as AddressInfo).port}`;
+    app = createApp({ dbPath: path.join(dir, 'test2.db'), uploadDir: path.join(dir, 'uploads2'), audioExtractUrl: stubUrl });
+  });
+
+  afterEach(async () => {
+    await new Promise((resolve) => stub.close(resolve));
+  });
+
+  it('reports the source only when configured', async () => {
+    expect((await request(app).get('/api/import/sources')).body).toEqual({ audioextract: true });
+    const bare = createApp({ dbPath: path.join(dir, 'bare.db'), uploadDir: path.join(dir, 'uploads3') });
+    expect((await request(bare).get('/api/import/sources')).body).toEqual({ audioextract: false });
+    expect((await request(bare).get('/api/import/audioextract')).status).toBe(404);
+  });
+
+  it('lists remote files', async () => {
+    const res = await request(app).get('/api/import/audioextract');
+    expect(res.status).toBe(200);
+    expect(res.body.map((f: { name: string }) => f.name)).toEqual(['Bài hát.wav', 'notes.txt']);
+  });
+
+  it('copies chosen files into the library and a playlist, skipping non-audio', async () => {
+    const { body: pl } = await request(app).post('/api/playlists').send({ name: 'Imported' });
+    const res = await request(app)
+      .post('/api/import/audioextract')
+      .send({ paths: ['t1/Bài hát.wav', 't2/notes.txt', 'missing/x.wav'], playlistId: pl.id });
+    expect(res.status).toBe(201);
+    expect(res.body.imported).toHaveLength(1);
+    expect(res.body.imported[0]).toMatchObject({ title: 'Bài hát', mimeType: 'audio/wav' });
+    expect(res.body.imported[0].duration).toBeCloseTo(1, 1);
+    expect(res.body.failed.map((f: { path: string }) => f.path)).toEqual(['t2/notes.txt', 'missing/x.wav']);
+    expect(readdirSync(path.join(dir, 'uploads2'))).toHaveLength(1);
+
+    const detail = await request(app).get(`/api/playlists/${pl.id}`);
+    expect(detail.body.tracks.map((t: { id: number }) => t.id)).toEqual([res.body.imported[0].id]);
+    const stream = await request(app).get(`/api/tracks/${res.body.imported[0].id}/stream`);
+    expect(stream.status).toBe(200);
+  });
+
+  it('rejects an empty selection', async () => {
+    expect((await request(app).post('/api/import/audioextract').send({ paths: [] })).status).toBe(400);
   });
 });

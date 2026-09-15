@@ -48,7 +48,28 @@ export const api = {
     request<void>(`/api/playlists/${playlistId}/tracks/${trackId}`, { method: 'DELETE' }),
   removeManyFromPlaylist: (playlistId: number, trackIds: number[]) =>
     request<PlaylistDetail & { removed: number }>(`/api/playlists/${playlistId}/tracks/remove`, json('POST', { trackIds })),
+
+  /** Which external sources the server can import from (AudioExtract results). */
+  importSources: () => request<{ audioextract: boolean }>('/api/import/sources'),
+  listAudioExtract: () => request<RemoteFile[]>('/api/import/audioextract'),
+  importFromAudioExtract: (paths: string[], playlistId?: number) =>
+    request<{ imported: Track[]; failed: { path: string; error: string }[] }>(
+      '/api/import/audioextract',
+      json('POST', { paths, playlistId: playlistId ?? null }),
+    ),
 };
+
+export interface RemoteFile {
+  path: string;
+  name: string;
+  size: number;
+  updatedAt: string;
+}
+
+export function formatSize(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 export function formatDuration(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return '--:--';

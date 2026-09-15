@@ -5,15 +5,18 @@ import { openDb } from './db.js';
 import { HttpError } from './errors.js';
 import { tracksRouter } from './routes/tracks.js';
 import { playlistsRouter } from './routes/playlists.js';
+import { importsRouter } from './routes/imports.js';
 
 export interface AppOptions {
   dbPath: string;
   uploadDir: string;
   /** Directory of the built client. When set, it is served as the SPA. */
   staticDir?: string;
+  /** AudioExtract server to import finished downloads from; the feature is hidden when unset. */
+  audioExtractUrl?: string;
 }
 
-export function createApp({ dbPath, uploadDir, staticDir }: AppOptions) {
+export function createApp({ dbPath, uploadDir, staticDir, audioExtractUrl }: AppOptions) {
   mkdirSync(uploadDir, { recursive: true });
   const db = openDb(dbPath);
 
@@ -21,6 +24,7 @@ export function createApp({ dbPath, uploadDir, staticDir }: AppOptions) {
   app.use(express.json());
   app.use('/api/tracks', tracksRouter(db, uploadDir));
   app.use('/api/playlists', playlistsRouter(db));
+  app.use('/api/import', importsRouter(db, uploadDir, { audioExtractUrl }));
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
 
   if (staticDir) {

@@ -10,6 +10,24 @@ const PLAYLIST_SELECT = `
   FROM playlists p
 `;
 
+/** Append tracks (in order) after the playlist's current last position; ids already present are skipped. */
+export function addTracksToPlaylist(db: Db, playlistId: number, trackIds: number[]): void {
+  const insert = db.prepare('INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?, ?, ?)');
+  db.exec('BEGIN');
+  try {
+    let { next } = db
+      .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS next FROM playlist_tracks WHERE playlist_id = ?')
+      .get(playlistId) as { next: number };
+    for (const trackId of trackIds) {
+      if (insert.run(playlistId, trackId, next).changes > 0) next += 1;
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
 export function playlistsRouter(db: Db): Router {
   const router = Router();
 
@@ -79,21 +97,7 @@ export function playlistsRouter(db: Db): Router {
     const missing = trackIds.filter((id) => !exists.get(id));
     if (missing.length) throw new HttpError(404, `Track not found: ${missing.join(', ')}`);
 
-    const playlistId = Number(req.params.id);
-    const insert = db.prepare('INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?, ?, ?)');
-    db.exec('BEGIN');
-    try {
-      let { next } = db
-        .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS next FROM playlist_tracks WHERE playlist_id = ?')
-        .get(playlistId) as { next: number };
-      for (const trackId of trackIds) {
-        if (insert.run(playlistId, trackId, next).changes > 0) next += 1;
-      }
-      db.exec('COMMIT');
-    } catch (e) {
-      db.exec('ROLLBACK');
-      throw e;
-    }
+    addTracksToPlaylist(db, Number(req.params.id), trackIds);
     res.status(201).json(getDetail(req.params.id));
   });
 

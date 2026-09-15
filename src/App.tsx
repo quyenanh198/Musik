@@ -17,6 +17,7 @@ export function App() {
   const [version, setVersion] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
   const [newPlaylistName, setNewPlaylistName] = useState<string | null>(null);
+  const [canImport, setCanImport] = useState(false);
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -36,6 +37,10 @@ export function App() {
   useEffect(() => {
     refreshTracks();
     refreshPlaylists();
+    api
+      .importSources()
+      .then((s) => setCanImport(s.audioextract))
+      .catch(() => setCanImport(false));
   }, [refreshTracks, refreshPlaylists]);
 
   const createPlaylist = async () => {
@@ -179,6 +184,8 @@ export function App() {
             tracks={tracks}
             playlists={playlists}
             onRefresh={refreshTracks}
+            canImport={canImport}
+            notify={notify}
             onAddToPlaylist={(pid, ts) => void addToPlaylist(pid, ts)}
             onEdit={editTrack}
             onEditMany={editMany}
@@ -194,6 +201,7 @@ export function App() {
             version={version}
             onPlaylistsChanged={refreshPlaylists}
             onTracksChanged={refreshTracks}
+            canImport={canImport}
             onDeleted={() => setView({ kind: 'library' })}
             onAddToPlaylist={addToPlaylist}
             onEdit={editTrack}
