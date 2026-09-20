@@ -508,3 +508,44 @@ describe('AudioExtract stays in step with the library', () => {
     expect(renames).toEqual([]);
   });
 });
+
+describe('the same song arriving twice from AudioExtract', () => {
+  let stub: Server;
+
+  beforeEach(async () => {
+    const ae = express();
+    // Two separate results holding the same audio — what happens when a download is repeated.
+    ae.get('/api/files', (_req, res) =>
+      res.json([
+        { path: 'a1/Bài.wav', name: 'Bài.wav', size: makeWav(1).length, updatedAt: '2026-01-01T00:00:00.000Z' },
+        { path: 'a2/Bài.wav', name: 'Bài.wav', size: makeWav(1).length, updatedAt: '2026-01-02T00:00:00.000Z' },
+      ]),
+    );
+    ae.get(/^\/api\/files\/(.+)$/, (_req, res) => res.type('audio/wav').send(makeWav(1)));
+    await new Promise<void>((resolve) => {
+      stub = ae.listen(0, '127.0.0.1', () => resolve());
+    });
+    app = makeApp({
+      dbPath: path.join(dir, 'twin.db'),
+      uploadDir: path.join(dir, 'uploads-twin'),
+      audioExtractUrl: `http://127.0.0.1:${(stub.address() as AddressInfo).port}`,
+    });
+  });
+
+  afterEach(async () => {
+    await new Promise((resolve) => stub.close(resolve));
+  });
+
+  it('keeps one track even though the two results are different files', async () => {
+    const res = await request(app)
+      .post('/api/import/audioextract')
+      .send({ paths: ['a1/Bài.wav', 'a2/Bài.wav'] });
+    expect(res.status).toBe(201);
+    expect(res.body.imported).toHaveLength(1);
+    expect(res.body.skipped).toHaveLength(1);
+    expect(res.body.failed).toHaveLength(0);
+    expect((await request(app).get('/api/tracks')).body).toHaveLength(1);
+    // The copy that lost the race leaves nothing behind on disk.
+    expect(readdirSync(path.join(dir, 'uploads-twin')).filter((f) => f.endsWith('.wav'))).toHaveLength(1);
+  });
+});

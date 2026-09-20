@@ -48,6 +48,10 @@ export function importsRouter(
   const selectBySource = db.prepare(
     "SELECT id, title, source_path AS sourcePath FROM tracks WHERE source_app = 'audioextract' AND source_id = ?",
   );
+  // Same song, different result folder: AudioExtract can hold the same download twice,
+  // and those are separate files with separate ids. Title plus byte size is what tells
+  // them apart from a genuinely new track.
+  const selectByContent = db.prepare('SELECT id, title FROM tracks WHERE title = ? AND size = ?');
 
   /**
    * Which track, if any, came from this remote file. Matching is by the stable
@@ -159,6 +163,12 @@ export function importsRouter(
 
         const tags = await readTags(dest, path.parse(name).name, true);
         const title = wanted ?? tags.title;
+        const twin = selectByContent.get(title, size) as unknown as { id: number; title: string } | undefined;
+        if (twin) {
+          await unlink(dest).catch(() => {});
+          skipped.push({ path: rel, trackId: twin.id, title: twin.title });
+          continue;
+        }
         cover = tags.picture ? await saveCover(coverDir, tags.picture.data, tags.picture.format) : null;
         const result = db
           .prepare(
