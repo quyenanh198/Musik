@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, formatDuration } from '../api';
 import { usePlayer } from '../player/PlayerProvider';
+import { NowPlaying } from './NowPlaying';
 
 const SLEEP_OPTIONS = [15, 30, 45, 60] as const;
 
@@ -51,10 +52,41 @@ function SleepTimer() {
 export function PlayerBar() {
   const p = usePlayer();
   const disabled = !p.current;
+  const [expanded, setExpanded] = useState(false);
+  // Track a swipe so a flick upwards opens the sheet, like YouTube Music.
+  const swipe = useRef<{ y: number; moved: boolean } | null>(null);
+
+  const open = () => {
+    if (p.queue.length) setExpanded(true);
+  };
 
   return (
-    <footer className="player">
-      <div className="player__now">
+    <>
+      {expanded && <NowPlaying onClose={() => setExpanded(false)} />}
+      <footer className="player">
+      <div
+        className={`player__now${p.queue.length ? ' player__now--opens' : ''}`}
+        role={p.queue.length ? 'button' : undefined}
+        tabIndex={p.queue.length ? 0 : undefined}
+        aria-expanded={expanded}
+        aria-label={p.current ? `Mở rộng: ${p.current.title}` : undefined}
+        onClick={open}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            open();
+          }
+        }}
+        onPointerDown={(e) => (swipe.current = { y: e.clientY, moved: false })}
+        onPointerMove={(e) => {
+          if (!swipe.current) return;
+          if (swipe.current.y - e.clientY > 40) {
+            swipe.current = null;
+            open();
+          }
+        }}
+        onPointerUp={() => (swipe.current = null)}
+      >
         {p.current && api.coverUrl(p.current) && (
           <img className="player__cover" src={api.coverUrl(p.current) ?? undefined} alt="" />
         )}
@@ -64,6 +96,9 @@ export function PlayerBar() {
               {p.current.title}
             </div>
             <div className="player__artist">{p.current.artist || 'Unknown artist'}</div>
+            <span className="player__expand" aria-hidden>
+              ⌃
+            </span>
           </>
         ) : (
           <div className="player__artist">Nothing playing</div>
@@ -126,6 +161,7 @@ export function PlayerBar() {
           aria-label="Volume"
         />
       </div>
-    </footer>
+      </footer>
+    </>
   );
 }

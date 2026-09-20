@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { Track } from '../../shared/types';
 import { api } from '../api';
 import { normalizeVolume } from '../preferences';
+import { moveItem } from '../queueOrder';
 
 export type RepeatMode = 'off' | 'all' | 'one';
 /** Pause at a wall-clock time, or after the current track ends. */
@@ -34,6 +35,12 @@ interface PlayerApi extends PlayerState {
   setVolume: (volume: number) => void;
   toggleShuffle: () => void;
   cycleRepeat: () => void;
+  /** Jump to a position in the queue and play it. */
+  playAt: (index: number) => void;
+  /** Reorder the queue; whatever is playing keeps playing. */
+  moveInQueue: (from: number, to: number) => void;
+  /** Drop one queue entry by position (the track stays in the library). */
+  removeAt: (index: number) => void;
   /** Drop a deleted track from the queue. */
   removeTrack: (trackId: number) => void;
   /** Refresh a track's metadata in the queue after an edit. */
@@ -184,6 +191,37 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     [audio],
   );
 
+  const playAt = useCallback((index: number) => {
+    setState((s) => (index < 0 || index >= s.queue.length ? s : { ...s, index, currentTime: 0, playing: true }));
+  }, []);
+
+  const moveInQueue = useCallback((from: number, to: number) => {
+    setState((s) => {
+      const queue = moveItem(s.queue, from, to);
+      if (queue === s.queue) return s;
+      // Follow the track that is playing rather than the position it used to sit at.
+      const playingTrack = s.queue[s.index];
+      return { ...s, queue, index: playingTrack ? queue.indexOf(playingTrack) : s.index };
+    });
+  }, []);
+
+  const removeAt = useCallback(
+    (index: number) => {
+      setState((s) => {
+        if (index < 0 || index >= s.queue.length) return s;
+        const queue = s.queue.filter((_, i) => i !== index);
+        if (index === s.index) {
+          // Dropping what is playing: stop rather than silently jumping to another song.
+          audio.pause();
+          audio.removeAttribute('src');
+          return { ...s, queue, index: -1, playing: false, currentTime: 0, duration: 0 };
+        }
+        return { ...s, queue, index: index < s.index ? s.index - 1 : s.index };
+      });
+    },
+    [audio],
+  );
+
   const updateTrack = useCallback((track: Track) => {
     setState((s) => ({ ...s, queue: s.queue.map((t) => (t.id === track.id ? track : t)) }));
   }, []);
@@ -313,6 +351,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       setVolume,
       toggleShuffle,
       cycleRepeat,
+      playAt,
+      moveInQueue,
+      removeAt,
       removeTrack,
       updateTrack,
     }),
@@ -329,6 +370,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       setVolume,
       toggleShuffle,
       cycleRepeat,
+      playAt,
+      moveInQueue,
+      removeAt,
       removeTrack,
       updateTrack,
     ],
