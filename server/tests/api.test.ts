@@ -12,13 +12,22 @@ import { makeWav } from './wav.js';
 
 let dir: string;
 let app: ReturnType<typeof createApp>;
+let apps: ReturnType<typeof createApp>[];
+
+const makeApp = (options: Parameters<typeof createApp>[0]) => {
+  const created = createApp(options);
+  apps.push(created);
+  return created;
+};
 
 beforeEach(() => {
+  apps = [];
   dir = mkdtempSync(path.join(tmpdir(), 'musik-'));
-  app = createApp({ dbPath: path.join(dir, 'test.db'), uploadDir: path.join(dir, 'uploads') });
+  app = makeApp({ dbPath: path.join(dir, 'test.db'), uploadDir: path.join(dir, 'uploads') });
 });
 
 afterEach(() => {
+  apps.forEach((created) => created.locals.close());
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -48,6 +57,14 @@ describe('tracks', () => {
     const res = await request(app)
       .post('/api/tracks')
       .attach('file', Buffer.from('hello'), { filename: 'x.txt', contentType: 'text/plain' });
+    expect(res.status).toBe(415);
+    expect(readdirSync(path.join(dir, 'uploads'))).toEqual([]);
+  });
+
+  it('rejects files whose bytes are not audio despite an audio MIME type', async () => {
+    const res = await request(app)
+      .post('/api/tracks')
+      .attach('file', Buffer.from('not actually audio'), { filename: 'fake.mp3', contentType: 'audio/mpeg' });
     expect(res.status).toBe(415);
     expect(readdirSync(path.join(dir, 'uploads'))).toEqual([]);
   });
@@ -269,11 +286,19 @@ describe('import from AudioExtract', () => {
     );
     ae.get('/api/files/t1/B%C3%A0i%20h%C3%A1t.wav', (_req, res) => res.type('audio/wav').send(makeWav(1)));
     ae.get('/api/files/t2/notes.txt', (_req, res) => res.type('text/plain').send('hello'));
+    ae.get('/api/files/huge.wav', (_req, res) => {
+      res.type('audio/wav').send(makeWav(2));
+    });
     await new Promise<void>((resolve) => {
       stub = ae.listen(0, '127.0.0.1', () => resolve());
     });
     stubUrl = `http://127.0.0.1:${(stub.address() as AddressInfo).port}`;
-    app = createApp({ dbPath: path.join(dir, 'test2.db'), uploadDir: path.join(dir, 'uploads2'), audioExtractUrl: stubUrl });
+    app = makeApp({
+      dbPath: path.join(dir, 'test2.db'),
+      uploadDir: path.join(dir, 'uploads2'),
+      audioExtractUrl: stubUrl,
+      audioExtractMaxBytes: makeWav(1).length + 10,
+    });
   });
 
   afterEach(async () => {
@@ -282,7 +307,7 @@ describe('import from AudioExtract', () => {
 
   it('reports the source only when configured', async () => {
     expect((await request(app).get('/api/import/sources')).body).toEqual({ audioextract: true });
-    const bare = createApp({ dbPath: path.join(dir, 'bare.db'), uploadDir: path.join(dir, 'uploads3') });
+    const bare = makeApp({ dbPath: path.join(dir, 'bare.db'), uploadDir: path.join(dir, 'uploads3') });
     expect((await request(bare).get('/api/import/sources')).body).toEqual({ audioextract: false });
     expect((await request(bare).get('/api/import/audioextract')).status).toBe(404);
   });
@@ -313,6 +338,13 @@ describe('import from AudioExtract', () => {
 
   it('rejects an empty selection', async () => {
     expect((await request(app).post('/api/import/audioextract').send({ paths: [] })).status).toBe(400);
+  });
+
+  it('rejects a remote file larger than the import limit', async () => {
+    const res = await request(app).post('/api/import/audioextract').send({ paths: ['huge.wav'] });
+    expect(res.status).toBe(502);
+    expect(res.body.failed[0].error).toContain('too large');
+    expect(readdirSync(path.join(dir, 'uploads2'))).toEqual([]);
   });
 
   it('lets the caller pick the title while importing', async () => {

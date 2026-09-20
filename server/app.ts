@@ -14,17 +14,25 @@ export interface AppOptions {
   staticDir?: string;
   /** AudioExtract server to import finished downloads from; the feature is hidden when unset. */
   audioExtractUrl?: string;
+  /** Maximum bytes accepted for one AudioExtract import. */
+  audioExtractMaxBytes?: number;
 }
 
-export function createApp({ dbPath, uploadDir, staticDir, audioExtractUrl }: AppOptions) {
+export function createApp({ dbPath, uploadDir, staticDir, audioExtractUrl, audioExtractMaxBytes }: AppOptions) {
   mkdirSync(uploadDir, { recursive: true });
   const db = openDb(dbPath);
 
   const app = express();
+  let closed = false;
+  app.locals.close = () => {
+    if (closed) return;
+    closed = true;
+    db.close();
+  };
   app.use(express.json());
   app.use('/api/tracks', tracksRouter(db, uploadDir));
   app.use('/api/playlists', playlistsRouter(db));
-  app.use('/api/import', importsRouter(db, uploadDir, { audioExtractUrl }));
+  app.use('/api/import', importsRouter(db, uploadDir, { audioExtractUrl, maxBytes: audioExtractMaxBytes }));
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
 
   if (staticDir) {

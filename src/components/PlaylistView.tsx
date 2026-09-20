@@ -5,6 +5,7 @@ import { usePlayer } from '../player/PlayerProvider';
 import { TrackList, type CoverChange, type TrackPatch } from './TrackList';
 import { UploadButton } from './UploadButton';
 import { ImportPicker } from './ImportPicker';
+import { useDialogFocus } from '../useDialogFocus';
 
 interface Props {
   id: number;
@@ -220,6 +221,7 @@ function LibraryPicker({
   const [query, setQuery] = useState('');
   const [chosen, setChosen] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);
+  const dialogRef = useDialogFocus<HTMLDivElement>(onClose, busy);
 
   const candidates = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -257,7 +259,7 @@ function LibraryPicker({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" role="dialog" aria-label="Add from library" onClick={(e) => e.stopPropagation()}>
+      <div ref={dialogRef} className="modal" role="dialog" aria-modal="true" aria-label="Add from library" onClick={(e) => e.stopPropagation()}>
         <div className="modal__head">
           <strong>Add from library</strong>
           <input

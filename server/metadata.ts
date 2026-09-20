@@ -15,10 +15,13 @@ export interface Tags {
 }
 
 /** Read what the file says about itself; `fallbackTitle` (the file name) when it has no tags. */
-export async function readTags(filePath: string, fallbackTitle: string): Promise<Tags> {
+export async function readTags(filePath: string, fallbackTitle: string, strict = false): Promise<Tags> {
   const tags: Tags = { title: fallbackTitle, artist: '', album: '', year: null, genre: '', duration: 0 };
   try {
     const meta = await parseFile(filePath, { duration: true });
+    if (strict && !meta.format.container && !meta.format.codec) {
+      throw new Error('No audio container or codec detected');
+    }
     tags.title = meta.common.title?.trim() || fallbackTitle;
     tags.artist = meta.common.artist?.trim() ?? '';
     tags.album = meta.common.album?.trim() ?? '';
@@ -27,7 +30,8 @@ export async function readTags(filePath: string, fallbackTitle: string): Promise
     tags.duration = meta.format.duration ?? 0;
     const pic = meta.common.picture?.find((p) => /front|cover/i.test(p.type ?? '')) ?? meta.common.picture?.[0];
     if (pic && pic.data.length > 0) tags.picture = { data: pic.data, format: pic.format };
-  } catch {
+  } catch (error) {
+    if (strict) throw error;
     // Unparseable tags: keep the filename-derived title.
   }
   return tags;

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Playlist, Track } from '../../shared/types';
 import { api, formatDuration, type TrackPatch } from '../api';
 import { usePlayer } from '../player/PlayerProvider';
+import { useDialogFocus } from '../useDialogFocus';
 
 export type { TrackPatch };
 
@@ -259,6 +260,7 @@ function TrackEditor({
   const [year, setYear] = useState(track.year ? String(track.year) : '');
   const [removeCover, setRemoveCover] = useState(false);
   const [saving, setSaving] = useState(false);
+  const dialogRef = useDialogFocus<HTMLFormElement>(onCancel, saving);
   const [error, setError] = useState<string | null>(null);
   const pick = useCoverPick();
 
@@ -283,8 +285,10 @@ function TrackEditor({
   return (
     <div className="modal-backdrop" onClick={saving ? undefined : onCancel}>
       <form
+        ref={dialogRef}
         className="modal editor"
         role="dialog"
+        aria-modal="true"
         aria-label="Edit metadata"
         onClick={(e) => e.stopPropagation()}
         onSubmit={(e) => {

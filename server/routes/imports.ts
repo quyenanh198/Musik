@@ -3,20 +3,24 @@ import { randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { Readable } from 'node:stream';
+import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { Db } from '../db.js';
 import { TRACK_COLUMNS } from '../db.js';
 import type { Track } from '../../shared/types.js';
 import { HttpError } from '../errors.js';
 import { addTracksToPlaylist } from './playlists.js';
-import { readTags, saveCover } from '../metadata.js';
+import { readTags, removeCover, saveCover } from '../metadata.js';
 import { coverDirOf } from './tracks.js';
 
 export interface ImportOptions {
   /** Base URL of the AudioExtract server (docker network), e.g. http://audioextract:3000. */
   audioExtractUrl?: string;
+  maxBytes?: number;
 }
+
+export const MAX_REMOTE_BYTES = 200 * 1024 * 1024;
+const REMOTE_TIMEOUT_MS = 30_000;
 
 export interface RemoteFile {
   path: string;
@@ -26,7 +30,7 @@ export interface RemoteFile {
 }
 
 /** Pull finished AudioExtract results into the library: list what's on that server, copy chosen files over. */
-export function importsRouter(db: Db, uploadDir: string, { audioExtractUrl }: ImportOptions): Router {
+export function importsRouter(db: Db, uploadDir: string, { audioExtractUrl, maxBytes = MAX_REMOTE_BYTES }: ImportOptions): Router {
   const router = Router();
   const base = audioExtractUrl?.replace(/\/$/, '');
 
@@ -34,7 +38,7 @@ export function importsRouter(db: Db, uploadDir: string, { audioExtractUrl }: Im
     if (!base) throw new HttpError(404, 'AudioExtract is not configured');
     let res: Response;
     try {
-      res = await fetch(`${base}${route}`);
+      res = await fetch(`${base}${route}`, { signal: AbortSignal.timeout(REMOTE_TIMEOUT_MS) });
     } catch (e) {
       throw new HttpError(502, `AudioExtract unreachable: ${(e as Error).message}`);
     }
@@ -97,17 +101,27 @@ export function importsRouter(db: Db, uploadDir: string, { audioExtractUrl }: Im
       seen.add(rel);
       const name = path.basename(rel);
       const dest = path.join(uploadDir, `${randomUUID()}${path.extname(name)}`);
+      let cover: string | null = null;
       try {
         const upstream = await remote(`/api/files/${encodePath(rel)}`);
         const mimeType = (upstream.headers.get('content-type') ?? '').split(';')[0].trim();
         if (!mimeType.startsWith('audio/')) throw new HttpError(415, `Not an audio file (${mimeType || 'unknown type'})`);
         if (!upstream.body) throw new HttpError(502, 'Empty response');
-        await pipeline(Readable.fromWeb(upstream.body as never), createWriteStream(dest));
+        const declaredSize = Number(upstream.headers.get('content-length'));
+        if (Number.isFinite(declaredSize) && declaredSize > maxBytes) throw new HttpError(413, 'Remote audio file is too large');
+        let received = 0;
+        const limit = new Transform({
+          transform(chunk: Buffer, _encoding, callback) {
+            received += chunk.length;
+            callback(received > maxBytes ? new HttpError(413, 'Remote audio file is too large') : null, chunk);
+          },
+        });
+        await pipeline(Readable.fromWeb(upstream.body as never), limit, createWriteStream(dest));
         const { size } = await stat(dest);
 
-        const tags = await readTags(dest, path.parse(name).name);
+        const tags = await readTags(dest, path.parse(name).name, true);
         const title = wanted ?? tags.title;
-        const cover = tags.picture ? await saveCover(coverDir, tags.picture.data, tags.picture.format) : null;
+        cover = tags.picture ? await saveCover(coverDir, tags.picture.data, tags.picture.format) : null;
         const result = db
           .prepare(
             'INSERT INTO tracks (title, artist, album, year, genre, cover, duration, mime_type, size, filename) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -116,6 +130,7 @@ export function importsRouter(db: Db, uploadDir: string, { audioExtractUrl }: Im
         imported.push(selectOne.get(Number(result.lastInsertRowid)) as unknown as Track);
       } catch (e) {
         await unlink(dest).catch(() => {});
+        await removeCover(coverDir, cover);
         failed.push({ path: rel, error: (e as Error).message });
       }
     }

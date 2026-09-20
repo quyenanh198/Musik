@@ -6,6 +6,7 @@ import { PlayerBar } from './components/PlayerBar';
 import { PlaylistView } from './components/PlaylistView';
 import type { CoverChange, TrackPatch } from './components/TrackList';
 import { usePlayer } from './player/PlayerProvider';
+import { applyTheme, normalizeTheme, THEME_KEY, type ThemePreference } from './preferences';
 
 type View = { kind: 'library' } | { kind: 'playlist'; id: number };
 
@@ -18,6 +19,17 @@ export function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [newPlaylistName, setNewPlaylistName] = useState<string | null>(null);
   const [canImport, setCanImport] = useState(false);
+  const [theme, setTheme] = useState<ThemePreference>(() => normalizeTheme(localStorage.getItem(THEME_KEY)));
+
+  useEffect(() => {
+    applyTheme(theme);
+    localStorage.setItem(THEME_KEY, theme);
+    if (theme !== 'system') return;
+    const media = matchMedia('(prefers-color-scheme: dark)');
+    const sync = () => applyTheme('system');
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, [theme]);
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -132,7 +144,7 @@ export function App() {
   return (
     <div className="app">
       <nav className="sidebar">
-        <div className="brand">♪ Musik</div>
+        <div className="brand"><span className="brand__mark" aria-hidden>M</span><span>Musik</span></div>
         <button
           className={`nav ${view.kind === 'library' ? 'nav--active' : ''}`}
           onClick={() => setView({ kind: 'library' })}
@@ -175,6 +187,14 @@ export function App() {
             {pl.name} <span className="muted">({pl.trackCount})</span>
           </button>
         ))}
+        <label className="theme-picker">
+          <span>Theme</span>
+          <select value={theme} onChange={(event) => setTheme(normalizeTheme(event.target.value))} aria-label="Color theme">
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
       </nav>
 
       <main className="main">
@@ -213,7 +233,7 @@ export function App() {
       </main>
 
       <PlayerBar />
-      {toast && <div className="toast">{toast}</div>}
+      {toast && <div className="toast" role="status" aria-live="polite">{toast}</div>}
     </div>
   );
 }

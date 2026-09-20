@@ -7,7 +7,7 @@ export default defineConfig({
     proxy: { '/api': 'http://localhost:3000' },
   },
   test: {
-    include: ['server/tests/**/*.test.ts'],
+    include: ['server/tests/**/*.test.ts', 'src/**/*.test.ts'],
     environment: 'node',
   },
 });

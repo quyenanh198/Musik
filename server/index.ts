@@ -13,6 +13,16 @@ const app = createApp({
   audioExtractUrl: process.env.AUDIOEXTRACT_URL || undefined,
 });
 
-app.listen(port, () => {
+const server = app.listen(port, () => {
   console.log(`Musik listening on http://localhost:${port}`);
 });
+
+const shutdown = () => {
+  server.close(() => {
+    app.locals.close();
+    process.exit(0);
+  });
+};
+
+process.once('SIGINT', shutdown);
+process.once('SIGTERM', shutdown);

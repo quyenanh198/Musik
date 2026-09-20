@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Track } from '../../shared/types';
 import { api } from '../api';
+import { normalizeVolume } from '../preferences';
 
 export type RepeatMode = 'off' | 'all' | 'one';
 /** Pause at a wall-clock time, or after the current track ends. */
@@ -66,7 +67,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     playing: false,
     currentTime: 0,
     duration: 0,
-    volume: Number(localStorage.getItem(VOLUME_KEY) ?? 1),
+    volume: normalizeVolume(localStorage.getItem(VOLUME_KEY)),
     shuffle: false,
     repeat: 'off',
     sleep: null,
@@ -123,9 +124,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   const setVolume = useCallback(
     (volume: number) => {
-      audio.volume = volume;
-      localStorage.setItem(VOLUME_KEY, String(volume));
-      setState((s) => ({ ...s, volume }));
+      const safeVolume = normalizeVolume(volume);
+      audio.volume = safeVolume;
+      localStorage.setItem(VOLUME_KEY, String(safeVolume));
+      setState((s) => ({ ...s, volume: safeVolume }));
     },
     [audio],
   );

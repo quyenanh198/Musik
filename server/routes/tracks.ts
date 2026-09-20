@@ -74,17 +74,23 @@ export function tracksRouter(db: Db, uploadDir: string): Router {
     const file = req.file;
     if (!file) throw new HttpError(400, 'Missing "file" field');
 
-    // Trình duyệt gửi tên file multipart bằng UTF-8 nhưng busboy/multer giải mã theo
-    // latin1, nên tên tiếng Việt/tiếng Trung thành "Chuyá»n hoÃ¡..." — đọc lại đúng mã.
-    const tags = await readTags(file.path, path.parse(fixFilename(file.originalname)).name);
-    const cover = tags.picture ? await saveCover(coverDir, tags.picture.data, tags.picture.format) : null;
-
-    const result = db
-      .prepare(
-        'INSERT INTO tracks (title, artist, album, year, genre, cover, duration, mime_type, size, filename) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      )
-      .run(tags.title, tags.artist, tags.album, tags.year, tags.genre, cover, tags.duration, file.mimetype, file.size, file.filename);
-    res.status(201).json(getTrack(String(result.lastInsertRowid)));
+    let cover: string | null = null;
+    try {
+      // Browsers send multipart names as UTF-8, while busboy exposes them as latin1.
+      const tags = await readTags(file.path, path.parse(fixFilename(file.originalname)).name, true);
+      cover = tags.picture ? await saveCover(coverDir, tags.picture.data, tags.picture.format) : null;
+      const result = db
+        .prepare(
+          'INSERT INTO tracks (title, artist, album, year, genre, cover, duration, mime_type, size, filename) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        )
+        .run(tags.title, tags.artist, tags.album, tags.year, tags.genre, cover, tags.duration, file.mimetype, file.size, file.filename);
+      res.status(201).json(getTrack(String(result.lastInsertRowid)));
+    } catch (error) {
+      await unlink(file.path).catch(() => {});
+      await removeCover(coverDir, cover);
+      if (error instanceof HttpError) throw error;
+      throw new HttpError(415, 'File contents are not recognized as audio');
+    }
   });
 
   const readIds = (body: unknown): number[] => {

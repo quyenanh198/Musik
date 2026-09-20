@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Track } from '../../shared/types';
 import { api, formatSize, type RemoteFile } from '../api';
+import { useDialogFocus } from '../useDialogFocus';
 
 /** Modal listing finished AudioExtract downloads; ticked files are copied into the library (and playlist, if given). */
 export function ImportPicker({
@@ -22,6 +23,7 @@ export function ImportPicker({
   const [titles, setTitles] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const dialogRef = useDialogFocus<HTMLDivElement>(onClose, busy);
 
   useEffect(() => {
     api
@@ -69,7 +71,7 @@ export function ImportPicker({
 
   return (
     <div className="modal-backdrop" onClick={busy ? undefined : onClose}>
-      <div className="modal" role="dialog" aria-label="Import from AudioExtract" onClick={(e) => e.stopPropagation()}>
+      <div ref={dialogRef} className="modal" role="dialog" aria-modal="true" aria-label="Import from AudioExtract" onClick={(e) => e.stopPropagation()}>
         <div className="modal__head">
           <strong>Import from AudioExtract{playlistName ? ` → ${playlistName}` : ''}</strong>
           <input
