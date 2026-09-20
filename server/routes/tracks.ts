@@ -8,6 +8,7 @@ import type { Db } from '../db.js';
 import { TRACK_COLUMNS } from '../db.js';
 import type { Track } from '../../shared/types.js';
 import { HttpError } from '../errors.js';
+import type { AudioExtractClient } from '../audioextract.js';
 
 const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
 
@@ -32,9 +33,30 @@ const readYear = (raw: unknown): number | null | undefined => {
   return n;
 };
 
-export function tracksRouter(db: Db, uploadDir: string): Router {
+export function tracksRouter(db: Db, uploadDir: string, audioExtract?: AudioExtractClient): Router {
   const router = Router();
   const coverDir = coverDirOf(uploadDir);
+
+  const selectSource = db.prepare(
+    "SELECT id, source_path AS sourcePath FROM tracks WHERE id = ? AND source_app = 'audioextract' AND source_path IS NOT NULL",
+  );
+  const updateSourcePath = db.prepare('UPDATE tracks SET source_path = ? WHERE id = ?');
+
+  /**
+   * Carry a title change back to AudioExtract so the file there keeps the same name.
+   * Best effort on purpose: the edit here already succeeded, and the remote can be
+   * down, the file expired, or the new name taken — none of that should surface as a
+   * failed edit. Renaming many tracks to one title only wins for the first of them.
+   */
+  const renameAtSource = async (ids: number[], title: string) => {
+    if (!audioExtract?.configured) return;
+    for (const id of ids) {
+      const row = selectSource.get(id) as unknown as { id: number; sourcePath: string } | undefined;
+      if (!row) continue;
+      const renamed = await audioExtract.rename(row.sourcePath, title);
+      if (renamed) updateSourcePath.run(renamed.path, id);
+    }
+  };
 
   const coverUpload = multer({
     storage: multer.memoryStorage(),
@@ -101,7 +123,7 @@ export function tracksRouter(db: Db, uploadDir: string): Router {
   };
 
   /** Bulk edit: `{ ids, patch: { title?, artist?, album?, genre?, year? } }` — only the fields present are changed, on every id. */
-  router.patch('/', (req, res) => {
+  router.patch('/', async (req, res) => {
     const ids = readIds(req.body);
     const patch = ((req.body as { patch?: unknown }).patch ?? {}) as TrackPatch;
     const sets: string[] = [];
@@ -122,6 +144,7 @@ export function tracksRouter(db: Db, uploadDir: string): Router {
       db.exec('ROLLBACK');
       throw e;
     }
+    if (typeof patch.title === 'string' && patch.title.trim()) await renameAtSource(ids, patch.title.trim());
     const placeholders = ids.map(() => '?').join(',');
     res.json(db.prepare(`SELECT ${TRACK_COLUMNS} FROM tracks WHERE id IN (${placeholders})`).all(...ids));
   });
@@ -171,7 +194,7 @@ export function tracksRouter(db: Db, uploadDir: string): Router {
     res.json(getTrack(req.params.id));
   });
 
-  router.patch('/:id', (req, res) => {
+  router.patch('/:id', async (req, res) => {
     const current = getTrack(req.params.id);
     const body = req.body as TrackPatch;
     const year = readYear(body.year);
@@ -190,6 +213,7 @@ export function tracksRouter(db: Db, uploadDir: string): Router {
       next.year,
       current.id,
     );
+    if (next.title !== current.title) await renameAtSource([current.id], next.title);
     res.json(getTrack(req.params.id));
   });
 

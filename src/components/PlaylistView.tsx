@@ -5,6 +5,7 @@ import { usePlayer } from '../player/PlayerProvider';
 import { TrackList, type CoverChange, type TrackPatch } from './TrackList';
 import { UploadButton } from './UploadButton';
 import { ImportPicker } from './ImportPicker';
+import { importSummary } from '../importSummary';
 import { useDialogFocus } from '../useDialogFocus';
 
 interface Props {
@@ -169,12 +170,12 @@ export function PlaylistView({
           playlistId={id}
           playlistName={detail.name}
           onClose={() => setImporting(false)}
-          onDone={(imported, failed) => {
+          onDone={({ imported, failed, skipped }) => {
             setImporting(false);
             load();
             onTracksChanged();
             onPlaylistsChanged();
-            notify(`Imported ${imported.length} tracks into ${detail.name}${failed.length ? `, ${failed.length} failed` : ''}`);
+            notify(`${importSummary(imported.length, failed.length, skipped.length)} → ${detail.name}`);
           }}
         />
       )}

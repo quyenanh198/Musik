@@ -6,6 +6,7 @@ import { HttpError } from './errors.js';
 import { tracksRouter } from './routes/tracks.js';
 import { playlistsRouter } from './routes/playlists.js';
 import { importsRouter } from './routes/imports.js';
+import { createAudioExtractClient } from './audioextract.js';
 
 export interface AppOptions {
   dbPath: string;
@@ -30,9 +31,11 @@ export function createApp({ dbPath, uploadDir, staticDir, audioExtractUrl, audio
     db.close();
   };
   app.use(express.json());
-  app.use('/api/tracks', tracksRouter(db, uploadDir));
+  // One client for both routers: imports pull files in, tracks push renames back.
+  const audioExtract = createAudioExtractClient(audioExtractUrl);
+  app.use('/api/tracks', tracksRouter(db, uploadDir, audioExtract));
   app.use('/api/playlists', playlistsRouter(db));
-  app.use('/api/import', importsRouter(db, uploadDir, { audioExtractUrl, maxBytes: audioExtractMaxBytes }));
+  app.use('/api/import', importsRouter(db, uploadDir, { audioExtract, maxBytes: audioExtractMaxBytes }));
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
 
   if (staticDir) {

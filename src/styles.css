@@ -16,3 +16,21 @@
 @media(max-width:800px){.player__now{grid-column:1/-1}.player__volume{display:none}}
 @supports(height:100dvh){.app{height:100dvh}}
 @media(max-width:800px){.sidebar{padding-right:112px}.theme-picker{position:fixed;z-index:15;top:10px;right:12px;margin:0;padding:0;background:var(--surface)}}
+
+/* The whole track row is clickable to play (the action buttons keep their own jobs). */
+.tracks__row { cursor: pointer; }
+.tracks__row--editing { cursor: default; }
+
+/* An AudioExtract file that is already in the library: shown, but not pickable again. */
+.pick--done { opacity: 0.6; }
+.pick--done .pick__title { cursor: default; }
+.pick__badge {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  white-space: nowrap;
+}

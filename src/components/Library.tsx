@@ -4,6 +4,7 @@ import { usePlayer } from '../player/PlayerProvider';
 import { TrackList, type CoverChange, type TrackPatch } from './TrackList';
 import { UploadButton } from './UploadButton';
 import { ImportPicker } from './ImportPicker';
+import { importSummary } from '../importSummary';
 
 interface Props {
   tracks: Track[];
@@ -55,10 +56,10 @@ export function Library({ tracks, playlists, onRefresh, canImport, notify, onAdd
       {importing && (
         <ImportPicker
           onClose={() => setImporting(false)}
-          onDone={(imported, failed) => {
+          onDone={({ imported, failed, skipped }) => {
             setImporting(false);
             onRefresh();
-            notify(`Imported ${imported.length} tracks${failed.length ? `, ${failed.length} failed` : ''}`);
+            notify(importSummary(imported.length, failed.length, skipped.length));
           }}
         />
       )}

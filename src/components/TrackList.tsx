@@ -153,6 +153,13 @@ export function TrackList({
               <tr
                 key={track.id}
                 className={`tracks__row${isCurrent ? ' tracks__row--current' : ''}${isSelected ? ' tracks__row--selected' : ''}`}
+                // Clicking anywhere on the row plays it; the checkbox, selects and action
+                // buttons keep their own behaviour, and a text selection is not a click.
+                onClick={(e) => {
+                  if ((e.target as HTMLElement).closest('button, select, input, label, a')) return;
+                  if (window.getSelection()?.toString()) return;
+                  player.playQueue(tracks, i);
+                }}
               >
                 <td className="tracks__check">
                   <input

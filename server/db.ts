@@ -32,6 +32,12 @@ const MIGRATIONS: Array<[column: string, ddl: string]> = [
   ['year', 'ALTER TABLE tracks ADD COLUMN year INTEGER'],
   ['genre', "ALTER TABLE tracks ADD COLUMN genre TEXT NOT NULL DEFAULT ''"],
   ['cover', 'ALTER TABLE tracks ADD COLUMN cover TEXT'],
+  // Where an imported track came from, so the same file is never imported twice and a
+  // rename on either side can be carried over: source_id is the stable half of the
+  // remote path, source_path the current one (its basename = the last name we synced).
+  ['source_app', 'ALTER TABLE tracks ADD COLUMN source_app TEXT'],
+  ['source_id', 'ALTER TABLE tracks ADD COLUMN source_id TEXT'],
+  ['source_path', 'ALTER TABLE tracks ADD COLUMN source_path TEXT'],
 ];
 
 export function openDb(path: string): Db {
@@ -40,10 +46,15 @@ export function openDb(path: string): Db {
   db.exec(SCHEMA);
   const have = new Set((db.prepare('PRAGMA table_info(tracks)').all() as { name: string }[]).map((c) => c.name));
   for (const [column, ddl] of MIGRATIONS) if (!have.has(column)) db.exec(ddl);
+  db.exec(SOURCE_INDEX);
   return db;
 }
 
 export const TRACK_COLUMNS = `
   id, title, artist, album, year, genre, cover, duration,
-  mime_type AS mimeType, size, created_at AS createdAt
+  mime_type AS mimeType, size, created_at AS createdAt,
+  source_app AS sourceApp
 `;
+
+/** Index on the import source, so listing what is already imported stays cheap. */
+export const SOURCE_INDEX = 'CREATE INDEX IF NOT EXISTS tracks_source ON tracks(source_app, source_id)';

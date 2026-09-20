@@ -7,6 +7,8 @@ export interface Track {
   genre: string;
   /** Cover image file name (null when none); fetch via /api/tracks/:id/cover. */
   cover: string | null;
+  /** Which app this track was imported from ('audioextract'), or null when uploaded here. */
+  sourceApp: string | null;
   /** Seconds. 0 when unknown. */
   duration: number;
   mimeType: string;

@@ -66,7 +66,7 @@ export const api = {
   listAudioExtract: () => request<RemoteFile[]>('/api/import/audioextract'),
   /** `title` overrides the tag/filename for that import. */
   importFromAudioExtract: (items: { path: string; title?: string }[], playlistId?: number) =>
-    request<{ imported: Track[]; failed: { path: string; error: string }[] }>(
+    request<ImportResult>(
       '/api/import/audioextract',
       json('POST', { items, playlistId: playlistId ?? null }),
     ),
@@ -80,6 +80,17 @@ export interface RemoteFile {
   name: string;
   size: number;
   updatedAt: string;
+  /** Set when this file is already in the library — importing it again is refused. */
+  trackId: number | null;
+  /** The title that track carries now. */
+  title: string | null;
+}
+
+export interface ImportResult {
+  imported: Track[];
+  failed: { path: string; error: string }[];
+  /** Files left alone because the library already has them. */
+  skipped: { path: string; trackId: number; title: string }[];
 }
 
 export function formatSize(bytes: number): string {

@@ -406,3 +406,105 @@ describe('metadata: year, genre, cover', () => {
     expect(readdirSync(path.join(dir, 'uploads', 'covers'))).toHaveLength(0);
   });
 });
+
+describe('AudioExtract stays in step with the library', () => {
+  let stub: Server;
+  let files: { path: string; name: string }[];
+  let renames: { path: string; name: string }[];
+
+  beforeEach(async () => {
+    files = [{ path: 't1/Bài hát.wav', name: 'Bài hát.wav' }];
+    renames = [];
+    const ae = express();
+    ae.use(express.json());
+    ae.get('/api/files', (_req, res) =>
+      res.json(files.map((f) => ({ ...f, size: makeWav(1).length, updatedAt: '2026-01-01T00:00:00.000Z' }))),
+    );
+    ae.get(/^\/api\/files\/(.+)$/, (_req, res) => res.type('audio/wav').send(makeWav(1)));
+    ae.post('/api/files/rename', (req, res) => {
+      const { path: from, name } = req.body as { path: string; name: string };
+      const file = files.find((f) => f.path === from);
+      if (!file) return res.status(404).json({ error: 'File not found' });
+      renames.push({ path: from, name });
+      const ext = from.slice(from.lastIndexOf('.'));
+      file.name = `${name}${ext}`;
+      file.path = `${from.split('/')[0]}/${file.name}`;
+      res.json({ path: file.path, name: file.name });
+    });
+    await new Promise<void>((resolve) => {
+      stub = ae.listen(0, '127.0.0.1', () => resolve());
+    });
+    app = makeApp({
+      dbPath: path.join(dir, 'sync.db'),
+      uploadDir: path.join(dir, 'uploads-sync'),
+      audioExtractUrl: `http://127.0.0.1:${(stub.address() as AddressInfo).port}`,
+    });
+  });
+
+  afterEach(async () => {
+    await new Promise((resolve) => stub.close(resolve));
+  });
+
+  const importAll = () =>
+    request(app).post('/api/import/audioextract').send({ paths: files.map((f) => f.path) });
+
+  it('imports a file once, then reports it as already there instead of duplicating it', async () => {
+    const first = await importAll();
+    expect(first.status).toBe(201);
+    expect(first.body.imported).toHaveLength(1);
+    const trackId = first.body.imported[0].id;
+    expect(first.body.imported[0].sourceApp).toBe('audioextract');
+
+    const again = await importAll();
+    expect(again.status).toBe(200);
+    expect(again.body.imported).toHaveLength(0);
+    expect(again.body.failed).toHaveLength(0);
+    expect(again.body.skipped).toEqual([{ path: files[0].path, trackId, title: 'Bài hát' }]);
+    expect((await request(app).get('/api/tracks')).body).toHaveLength(1);
+
+    const listed = await request(app).get('/api/import/audioextract');
+    expect(listed.body[0]).toMatchObject({ trackId, title: 'Bài hát' });
+  });
+
+  it('renaming in the library renames the file in AudioExtract', async () => {
+    const { body } = await importAll();
+    const track = body.imported[0];
+
+    const renamed = await request(app).patch(`/api/tracks/${track.id}`).send({ title: 'Tên mới' });
+    expect(renamed.status).toBe(200);
+    expect(renames).toEqual([{ path: 't1/Bài hát.wav', name: 'Tên mới' }]);
+    expect(files[0].path).toBe('t1/Tên mới.wav');
+
+    // The link survives the rename: the file is still recognised as imported.
+    const listed = await request(app).get('/api/import/audioextract');
+    expect(listed.body[0]).toMatchObject({ path: 't1/Tên mới.wav', trackId: track.id });
+  });
+
+  it('a rename done in AudioExtract is carried into the library', async () => {
+    const { body } = await importAll();
+    const track = body.imported[0];
+
+    files[0] = { path: 't1/Đổi bên kia.wav', name: 'Đổi bên kia.wav' };
+    const listed = await request(app).get('/api/import/audioextract');
+    expect(listed.body[0]).toMatchObject({ trackId: track.id, title: 'Đổi bên kia' });
+    expect((await request(app).get(`/api/tracks/${track.id}`)).body.title).toBe('Đổi bên kia');
+  });
+
+  it('keeps editing usable when AudioExtract is unreachable', async () => {
+    const { body } = await importAll();
+    await new Promise((resolve) => stub.close(resolve));
+    const renamed = await request(app).patch(`/api/tracks/${body.imported[0].id}`).send({ title: 'Vẫn đổi được' });
+    expect(renamed.status).toBe(200);
+    expect(renamed.body.title).toBe('Vẫn đổi được');
+    stub = express().listen(0, '127.0.0.1');
+  });
+
+  it('leaves a track uploaded here alone', async () => {
+    const { body: track } = await request(app)
+      .post('/api/tracks')
+      .attach('file', makeWav(1), { filename: 'local.wav', contentType: 'audio/wav' });
+    expect(track.sourceApp).toBeNull();
+    await request(app).patch(`/api/tracks/${track.id}`).send({ title: 'Đổi tên cục bộ' });
+    expect(renames).toEqual([]);
+  });
+});

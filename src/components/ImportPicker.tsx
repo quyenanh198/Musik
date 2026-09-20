@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Track } from '../../shared/types';
-import { api, formatSize, type RemoteFile } from '../api';
+import { api, formatSize, type ImportResult, type RemoteFile } from '../api';
 import { useDialogFocus } from '../useDialogFocus';
 
 /** Modal listing finished AudioExtract downloads; ticked files are copied into the library (and playlist, if given). */
@@ -12,7 +12,7 @@ export function ImportPicker({
 }: {
   playlistId?: number;
   playlistName?: string;
-  onDone: (imported: Track[], failed: { path: string; error: string }[]) => void;
+  onDone: (result: ImportResult) => void;
   onClose: () => void;
 }) {
   const [files, setFiles] = useState<RemoteFile[] | null>(null);
@@ -36,7 +36,10 @@ export function ImportPicker({
     const q = query.trim().toLowerCase();
     return (files ?? []).filter((f) => !q || f.name.toLowerCase().includes(q));
   }, [files, query]);
-  const allShown = shown.length > 0 && shown.every((f) => chosen.has(f.path));
+  // Files already in the library can't be picked, so "all" means all the new ones.
+  const selectable = useMemo(() => shown.filter((f) => f.trackId === null), [shown]);
+  const alreadyCount = shown.length - selectable.length;
+  const allShown = selectable.length > 0 && selectable.every((f) => chosen.has(f.path));
 
   const toggle = (p: string) =>
     setChosen((prev) => {
@@ -48,8 +51,8 @@ export function ImportPicker({
   const toggleAll = () =>
     setChosen((prev) => {
       const next = new Set(prev);
-      if (allShown) shown.forEach((f) => next.delete(f.path));
-      else shown.forEach((f) => next.add(f.path));
+      if (allShown) selectable.forEach((f) => next.delete(f.path));
+      else selectable.forEach((f) => next.add(f.path));
       return next;
     });
 
@@ -62,7 +65,7 @@ export function ImportPicker({
         [...chosen].map((p) => ({ path: p, title: titles[p]?.trim() || undefined })),
         playlistId,
       );
-      onDone(result.imported, result.failed);
+      onDone(result);
     } catch (e) {
       setError((e as Error).message);
       setBusy(false);
@@ -84,8 +87,9 @@ export function ImportPicker({
             autoFocus
           />
           <label className="modal__all">
-            <input type="checkbox" checked={allShown} onChange={toggleAll} disabled={shown.length === 0} />
-            All shown ({shown.length})
+            <input type="checkbox" checked={allShown} onChange={toggleAll} disabled={selectable.length === 0} />
+            All new ({selectable.length})
+            {alreadyCount > 0 && <span className="muted"> · {alreadyCount} đã nhập</span>}
           </label>
         </div>
         <div className="modal__list">
@@ -97,14 +101,18 @@ export function ImportPicker({
           ) : (
             shown.map((f) => {
               const base = f.name.replace(/\.[^.]+$/, '');
+              const done = f.trackId !== null;
               return (
-                <div key={f.path} className={`pick pick--row${chosen.has(f.path) ? ' pick--on' : ''}`}>
+                <div
+                  key={f.path}
+                  className={`pick pick--row${chosen.has(f.path) ? ' pick--on' : ''}${done ? ' pick--done' : ''}`}
+                >
                   <input
                     type="checkbox"
                     checked={chosen.has(f.path)}
                     onChange={() => toggle(f.path)}
-                    disabled={busy}
-                    aria-label={`Select ${f.name}`}
+                    disabled={busy || done}
+                    aria-label={done ? `${f.name} đã có trong thư viện` : `Select ${f.name}`}
                   />
                   {editing === f.path ? (
                     <input
@@ -120,13 +128,18 @@ export function ImportPicker({
                       }}
                     />
                   ) : (
-                    <span className="pick__title" onClick={() => toggle(f.path)}>
+                    <span className="pick__title" onClick={() => !done && toggle(f.path)}>
                       {titles[f.path]?.trim() ? (
                         <>
                           {titles[f.path]} <span className="muted">({f.name})</span>
                         </>
                       ) : (
                         f.name
+                      )}
+                      {done && (
+                        <span className="pick__badge" title={`Đã nhập: ${f.title ?? ''}`}>
+                          đã nhập{f.title && f.title !== base ? ` · ${f.title}` : ''}
+                        </span>
                       )}
                     </span>
                   )}
@@ -135,8 +148,8 @@ export function ImportPicker({
                   </span>
                   <button
                     className="icon"
-                    title="Set title"
-                    disabled={busy}
+                    title={done ? 'Đã có trong thư viện — sửa tên ở thư viện' : 'Set title'}
+                    disabled={busy || done}
                     onClick={() => {
                       setChosen((prev) => new Set(prev).add(f.path));
                       setEditing(f.path);
