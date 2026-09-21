@@ -48,3 +48,4 @@ Musik has a remarkably solid engineering foundation:
    - Normalize Vietnamese diacritics and case for seamless search matching.
 2. **Albums & Artists Grouping**
    - Provide organized views for browsing by Artist, Album, or Genre rather than only a single flat list.
+

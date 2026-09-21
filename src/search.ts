@@ -21,3 +21,4 @@ export function matchesQuery(target: string, query: string): boolean {
   if (!target) return false;
   return normalizeSearch(target).includes(normalizeSearch(query));
 }
+

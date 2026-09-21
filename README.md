@@ -6,7 +6,11 @@ Self-hosted web music player with a responsive, minimalist interface. Upload aud
 
 ## Features
 
-- Responsive desktop and mobile layouts
+- Responsive desktop and mobile layouts with clean vector SVG iconography
+- Immersive Now Playing sheet with dynamic ambient album art backdrop illumination
+- Animated equalizer playback indicator on active tracks with progressive disclosure controls
+- Seamless audio pre-buffering that eliminates inter-track latency
+- Accent-tolerant & diacritic-insensitive search matching (e.g. Vietnamese diacritics, case-insensitive)
 - Light, dark, and system themes, English and Vietnamese (follows the browser, switchable), both remembered
 - Track uploads by button or by dropping files anywhere on the page, with live progress; audio-content validation and a 200 MB per-file limit
 - Title, artist, album, year, genre, and cover-art editing, including bulk actions
@@ -17,6 +21,7 @@ Self-hosted web music player with a responsive, minimalist interface. Upload aud
 - Optional imports from an AudioExtract server
 - Installable Progressive Web App that opens offline (the library needs the server)
 - Local SQLite database and file storage—no external database required
+- Product audit & design roadmap documented in [`AUDIT.md`](AUDIT.md) and [`HANDOFF.md`](HANDOFF.md)
 
 ### Keyboard shortcuts
 

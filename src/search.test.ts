@@ -32,3 +32,4 @@ describe('matchesQuery', () => {
     expect(matchesQuery('Any track', '')).toBe(true);
   });
 });
+
