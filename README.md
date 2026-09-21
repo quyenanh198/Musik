@@ -1,3 +1,5 @@
+<p align="center"><img src="public/logo.svg" alt="Musik" width="180"></p>
+
 # Musik
 
 Self-hosted web music player with a responsive, minimalist interface. Upload audio, edit metadata and cover art, organise tracks into playlists, and keep listening while the tab is in the background.
@@ -5,14 +7,28 @@ Self-hosted web music player with a responsive, minimalist interface. Upload aud
 ## Features
 
 - Responsive desktop and mobile layouts
-- Light, dark, and system themes with a saved preference
-- Track uploads with audio-content validation and a 200 MB per-file limit
+- Light, dark, and system themes, English and Vietnamese (follows the browser, switchable), both remembered
+- Track uploads by button or by dropping files anywhere on the page, with live progress; audio-content validation and a 200 MB per-file limit
 - Title, artist, album, year, genre, and cover-art editing, including bulk actions
-- Ordered playlists, search, shuffle, repeat, volume, seeking, and sleep timer
-- Media Session support for lock-screen and headset controls
+- Library sorting (date added, title, artist, album, year, length) that is remembered
+- Ordered playlists you can reorder, search, shuffle (and back to the original order), repeat, volume, mute, seeking, and sleep timer
+- Picks up where it left off: the queue, position, shuffle and repeat survive a reload
+- Keyboard shortcuts and Media Session support for lock-screen and headset controls
 - Optional imports from an AudioExtract server
-- Installable Progressive Web App
+- Installable Progressive Web App that opens offline (the library needs the server)
 - Local SQLite database and file storage—no external database required
+
+### Keyboard shortcuts
+
+| Key | Action |
+| --- | --- |
+| `Space` | Play / pause |
+| `←` / `→` | Seek 5 seconds back / forward |
+| `Shift+←` / `Shift+→`, `P` / `N` | Previous / next track |
+| `M` | Mute |
+| `/` | Focus the search box |
+
+Shortcuts never fire while typing, inside a dialog, or on a button you reached with the keyboard.
 
 ## Technology
 
@@ -29,7 +45,8 @@ Node.js **22.13 or newer**.
 ```bash
 npm install
 npm run dev        # API on :3000, Vite client on :5173
-npm test           # API and preference tests
+npm test           # API, player-logic, sorting, i18n and preference tests
+npm run lint       # ESLint, including the React hooks rules
 npm run build      # typecheck and build the production client
 ```
 
@@ -49,6 +66,7 @@ npm start          # http://localhost:3000
 | Variable | Default | Description |
 | --- | --- | --- |
 | `PORT` | `3000` | HTTP port |
+| `HOST` | all interfaces | Address to listen on, e.g. `127.0.0.1` behind a reverse proxy |
 | `MUSIK_DATA_DIR` | `./data` | Folder containing `musik.db` and `uploads/` |
 | `AUDIOEXTRACT_URL` | unset | Optional AudioExtract base URL, such as `http://audioextract:3000` |
 
@@ -86,11 +104,19 @@ docker run --rm -p 3000:3000 -v musik-data:/data musik
 
 To enable AudioExtract, place both services on the same Docker network and provide `AUDIOEXTRACT_URL` to the Musik container.
 
+The image runs as the unprivileged `node` user and has a `HEALTHCHECK` (`GET /api/health`). A **new** volume works as is. A volume created by an earlier version of the image is owned by root and must be handed over once, or Musik cannot open its database:
+
+```bash
+docker run --rm -v musik-data:/data alpine chown -R 1000:1000 /data
+```
+
 ## Data and security
 
 - Back up the configured data folder; it contains the database and uploaded media.
-- Musik validates uploaded and imported file contents instead of relying only on browser-provided MIME types.
-- AudioExtract downloads have a 30-second request timeout and a 200 MB per-file limit.
+- Musik validates uploaded and imported file contents instead of relying only on browser-provided MIME types; cover images are checked by their bytes too, and stored file extensions are restricted.
+- AudioExtract downloads stop after 30 seconds of silence (not 30 seconds in total, so large files finish), have a 200 MB per-file limit, and only accept relative paths inside the remote's files route.
+- Requests are validated: ids must be real ids, text fields have length limits, JSON bodies are capped at 256 KB, and malformed input is a `4xx`, never a `500`.
+- In production the client is served with a Content-Security-Policy (scripts and styles from this origin only), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and a same-origin referrer policy.
 - The server has no built-in authentication. Keep it on a trusted network or place it behind an authenticated reverse proxy before exposing it publicly.
 - Shutdown signals close the HTTP server and SQLite connection cleanly.
 
@@ -98,6 +124,7 @@ To enable AudioExtract, place both services on the same Docker network and provi
 
 | Method | Path | Description |
 | --- | --- | --- |
+| `GET` | `/api/health` | Liveness and database check (used by the Docker `HEALTHCHECK`) |
 | `GET` | `/api/tracks` | List tracks |
 | `POST` | `/api/tracks` | Upload the multipart `file` field |
 | `PATCH` | `/api/tracks` | Update metadata for multiple tracks |
@@ -117,6 +144,7 @@ To enable AudioExtract, place both services on the same Docker network and provi
 | `DELETE` | `/api/playlists/:id` | Delete a playlist while retaining its tracks |
 | `POST` | `/api/playlists/:id/tracks` | Append one or more tracks |
 | `POST` | `/api/playlists/:id/tracks/remove` | Remove multiple tracks |
+| `POST` | `/api/playlists/:id/tracks/move` | Move one track: `{ trackId, toIndex }` |
 | `DELETE` | `/api/playlists/:id/tracks/:trackId` | Remove one track |
 | `GET` | `/api/import/sources` | List configured import sources |
 | `GET` | `/api/import/audioextract` | List completed AudioExtract files |
@@ -127,6 +155,7 @@ To enable AudioExtract, place both services on the same Docker network and provi
 ```bash
 git pull
 npm ci
+npm run lint
 npm test
 npm run build
 npm audit
@@ -136,4 +165,4 @@ Restart the service only after all commands succeed. See [`HANDOFF.md`](HANDOFF.
 
 ## CI
 
-`.github/workflows/ci.yml` installs dependencies, runs tests and the production build on every push and pull request, then uploads `dist/` as the `musik-dist` artifact.
+`.github/workflows/ci.yml` installs dependencies, then runs lint, tests, the production build and `npm audit` for shipped dependencies on every push and pull request, and uploads `dist/` as the `musik-dist` artifact. A second job checks that the Docker image builds.
