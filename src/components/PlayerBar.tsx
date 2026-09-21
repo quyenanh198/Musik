@@ -1,47 +1,55 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, formatDuration } from '../api';
+import { useI18n } from '../I18nProvider';
+import { REPEAT_LABEL_KEY } from '../i18n';
 import { usePlayer } from '../player/PlayerProvider';
 import { NowPlaying } from './NowPlaying';
+import { SeekBar } from './SeekBar';
 
-const SLEEP_OPTIONS = [15, 30, 45, 60] as const;
+const SLEEP_OPTIONS = [15, 30, 45, 60] as const; // minutes
 
 function SleepTimer() {
   const p = usePlayer();
+  const { t } = useI18n();
   const endsAt = p.sleep?.kind === 'minutes' ? p.sleep.endsAt : null;
   const [now, setNow] = useState(Date.now);
 
   // Tick once a second only while a countdown is running.
   useEffect(() => {
     if (endsAt === null) return;
-    setNow(Date.now());
+    // The first reading is scheduled, not set here, so a stale `now` from before the timer started lasts one tick.
+    const first = window.setTimeout(() => setNow(Date.now()), 0);
     const id = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(id);
+    return () => {
+      window.clearTimeout(first);
+      window.clearInterval(id);
+    };
   }, [endsAt]);
 
   const remaining = endsAt === null ? null : formatDuration(Math.max(0, (endsAt - now) / 1000));
 
   return (
-    <label className={`sleep ${p.sleep ? 'sleep--active' : ''}`} title="Sleep timer">
+    <label className={`sleep ${p.sleep ? 'sleep--active' : ''}`} title={t('sleep.label')}>
       <span aria-hidden>⏾</span>
       <select
         className="select"
-        aria-label="Sleep timer"
+        aria-label={t('sleep.label')}
         value={p.sleep === null ? '' : p.sleep.kind === 'track' ? 'track' : 'minutes'}
         onChange={(e) => {
           const v = e.target.value;
           p.setSleep(v === '' ? null : v === 'track' ? 'track' : Number(v));
         }}
       >
-        <option value="">{p.sleep ? 'Off' : 'Sleep'}</option>
+        <option value="">{p.sleep ? t('sleep.off') : t('sleep.label')}</option>
         {SLEEP_OPTIONS.map((m) => (
           <option key={m} value={m}>
-            {m} min
+            {t('sleep.minutes', { n: m })}
           </option>
         ))}
-        <option value="track">End of track</option>
+        <option value="track">{t('sleep.endOfTrack')}</option>
         {remaining !== null && (
           <option value="minutes" hidden>
-            {remaining} left
+            {t('sleep.left', { time: remaining })}
           </option>
         )}
       </select>
@@ -51,116 +59,107 @@ function SleepTimer() {
 
 export function PlayerBar() {
   const p = usePlayer();
+  const { t } = useI18n();
   const disabled = !p.current;
   const [expanded, setExpanded] = useState(false);
   // Track a swipe so a flick upwards opens the sheet, like YouTube Music.
-  const swipe = useRef<{ y: number; moved: boolean } | null>(null);
+  const swipeStart = useRef<number | null>(null);
 
   const open = () => {
     if (p.queue.length) setExpanded(true);
   };
 
+  const cover = p.current ? api.coverUrl(p.current) : null;
+
   return (
     <>
       {expanded && <NowPlaying onClose={() => setExpanded(false)} />}
       <footer className="player">
-      <div
-        className={`player__now${p.queue.length ? ' player__now--opens' : ''}`}
-        role={p.queue.length ? 'button' : undefined}
-        tabIndex={p.queue.length ? 0 : undefined}
-        aria-expanded={expanded}
-        aria-label={p.current ? `Mở rộng: ${p.current.title}` : undefined}
-        onClick={open}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            open();
-          }
-        }}
-        onPointerDown={(e) => (swipe.current = { y: e.clientY, moved: false })}
-        onPointerMove={(e) => {
-          if (!swipe.current) return;
-          if (swipe.current.y - e.clientY > 40) {
-            swipe.current = null;
-            open();
-          }
-        }}
-        onPointerUp={() => (swipe.current = null)}
-      >
-        {p.current && api.coverUrl(p.current) && (
-          <img className="player__cover" src={api.coverUrl(p.current) ?? undefined} alt="" />
-        )}
-        {p.current ? (
-          <>
-            <div className="player__title" title={p.current.title}>
-              {p.current.title}
-            </div>
-            <div className="player__artist">{p.current.artist || 'Unknown artist'}</div>
-            <span className="player__expand" aria-hidden>
-              ⌃
-            </span>
-          </>
-        ) : (
-          <div className="player__artist">Nothing playing</div>
-        )}
-      </div>
-
-      <div className="player__center">
-        <div className="player__controls">
-          <button
-            className={`icon ${p.shuffle ? 'icon--active' : ''}`}
-            onClick={p.toggleShuffle}
-            title="Shuffle"
-            aria-pressed={p.shuffle}
-          >
-            ⇄
-          </button>
-          <button className="icon" onClick={p.prev} disabled={disabled} title="Previous">
-            ⏮
-          </button>
-          <button className="icon icon--big" onClick={p.toggle} disabled={disabled} title={p.playing ? 'Pause' : 'Play'}>
-            {p.playing ? '⏸' : '▶'}
-          </button>
-          <button className="icon" onClick={p.next} disabled={disabled} title="Next">
-            ⏭
-          </button>
-          <button
-            className={`icon ${p.repeat !== 'off' ? 'icon--active' : ''}`}
-            onClick={p.cycleRepeat}
-            title={`Repeat: ${p.repeat}`}
-          >
-            {p.repeat === 'one' ? '↻¹' : '↻'}
-          </button>
+        <div
+          className={`player__now${p.queue.length ? ' player__now--opens' : ''}`}
+          role={p.queue.length ? 'button' : undefined}
+          tabIndex={p.queue.length ? 0 : undefined}
+          aria-expanded={p.queue.length ? expanded : undefined}
+          aria-label={p.current ? t('player.expand', { title: p.current.title }) : undefined}
+          onClick={open}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              open();
+            }
+          }}
+          onPointerDown={(e) => {
+            swipeStart.current = e.clientY;
+          }}
+          onPointerMove={(e) => {
+            if (swipeStart.current === null) return;
+            if (swipeStart.current - e.clientY > 40) {
+              swipeStart.current = null;
+              open();
+            }
+          }}
+          onPointerUp={() => {
+            swipeStart.current = null;
+          }}
+        >
+          {cover && <img className="player__cover" src={cover} alt="" />}
+          {p.current ? (
+            <>
+              <div className="player__title" title={p.current.title}>
+                {p.current.title}
+              </div>
+              <div className="player__artist">{p.current.artist || t('common.unknownArtist')}</div>
+              <span className="player__expand" aria-hidden>
+                ⌃
+              </span>
+            </>
+          ) : (
+            <div className="player__artist">{t('player.nothingPlaying')}</div>
+          )}
         </div>
-        <div className="player__seek">
-          <span className="mono">{formatDuration(p.currentTime)}</span>
+
+        <div className="player__center">
+          <div className="player__controls">
+            <button className={`icon ${p.shuffle ? 'icon--active' : ''}`} onClick={p.toggleShuffle} title={t('player.shuffle')} aria-pressed={p.shuffle}>
+              ⇄
+            </button>
+            <button className="icon" onClick={p.prev} disabled={disabled} title={t('player.previous')}>
+              ⏮
+            </button>
+            <button className="icon icon--big" onClick={p.toggle} disabled={disabled} title={p.playing ? t('player.pause') : t('player.play')}>
+              {p.playing ? '⏸' : '▶'}
+            </button>
+            <button className="icon" onClick={p.next} disabled={disabled} title={t('player.next')}>
+              ⏭
+            </button>
+            <button
+              className={`icon ${p.repeat !== 'off' ? 'icon--active' : ''}`}
+              onClick={p.cycleRepeat}
+              title={t('player.repeat', { mode: t(REPEAT_LABEL_KEY[p.repeat]) })}
+            >
+              {p.repeat === 'one' ? '↻¹' : '↻'}
+            </button>
+          </div>
+          <div className="player__seek">
+            <SeekBar disabled={disabled} />
+          </div>
+        </div>
+
+        <div className="player__volume">
+          <SleepTimer />
+          <button className="icon" onClick={p.toggleMute} title={t('player.mute')} aria-pressed={p.muted}>
+            {p.muted || p.volume === 0 ? '🔇' : '🔊'}
+          </button>
           <input
             type="range"
             min={0}
-            max={p.duration || 0}
-            step={0.5}
-            value={Math.min(p.currentTime, p.duration || 0)}
-            disabled={disabled || !p.duration}
-            onChange={(e) => p.seek(Number(e.target.value))}
-            aria-label="Seek"
+            max={1}
+            step={0.01}
+            value={p.muted ? 0 : p.volume}
+            onChange={(e) => p.setVolume(Number(e.target.value))}
+            aria-label={t('player.volume')}
           />
-          <span className="mono">{formatDuration(p.duration)}</span>
         </div>
-      </div>
-
-      <div className="player__volume">
-        <SleepTimer />
-        <span aria-hidden>🔊</span>
-        <input
-          type="range"
-          min={0}
-          max={1}
-          step={0.01}
-          value={p.volume}
-          onChange={(e) => p.setVolume(Number(e.target.value))}
-          aria-label="Volume"
-        />
-      </div>
       </footer>
     </>
   );

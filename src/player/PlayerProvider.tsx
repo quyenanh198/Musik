@@ -1,27 +1,36 @@
+/* This file drives the browser's HTMLAudioElement (pause, currentTime, src, volume): an external, mutable object owned
+   by the player, not React state. The "immutability" rule cannot tell those apart, so it is off here and nowhere else. */
+/* eslint-disable react-hooks/immutability */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Track } from '../../shared/types';
 import { api } from '../api';
 import { normalizeVolume } from '../preferences';
-import { moveItem } from '../queueOrder';
+import { readStored, removeStored, writeStored } from '../storage';
+import { useLatest } from '../useLatest';
+import { getAudioElement, VOLUME_KEY } from './audio';
+import { PLAYBACK_KEY, parseSavedPlayback, restorePlayback, serializePlayback } from './persistence';
+import * as Q from './queueState';
 
-export type RepeatMode = 'off' | 'all' | 'one';
+export type { RepeatMode } from './queueState';
 /** Pause at a wall-clock time, or after the current track ends. */
 export type SleepTimer = { kind: 'minutes'; endsAt: number } | { kind: 'track' } | null;
-
-interface PlayerState {
-  queue: Track[];
-  index: number;
-  playing: boolean;
-  currentTime: number;
-  duration: number;
-  volume: number;
-  shuffle: boolean;
-  repeat: RepeatMode;
-  sleep: SleepTimer;
+/** The last track that failed to play; `nonce` changes every time so the same track failing twice is still news. */
+export interface PlaybackError {
+  title: string;
+  nonce: number;
 }
 
-interface PlayerApi extends PlayerState {
+interface PlayerApi {
+  queue: Track[];
+  index: number;
   current: Track | null;
+  playing: boolean;
+  volume: number;
+  muted: boolean;
+  shuffle: boolean;
+  repeat: Q.RepeatMode;
+  sleep: SleepTimer;
+  playbackError: PlaybackError | null;
   /** Replace the queue and start at `startIndex`. */
   playQueue: (tracks: Track[], startIndex: number) => void;
   /** Turn shuffle on and play `tracks` in random order. */
@@ -32,7 +41,10 @@ interface PlayerApi extends PlayerState {
   next: () => void;
   prev: () => void;
   seek: (seconds: number) => void;
+  /** Seek relative to where the track is now (negative = back). */
+  seekBy: (delta: number) => void;
   setVolume: (volume: number) => void;
+  toggleMute: () => void;
   toggleShuffle: () => void;
   cycleRepeat: () => void;
   /** Jump to a position in the queue and play it. */
@@ -45,233 +57,287 @@ interface PlayerApi extends PlayerState {
   removeTrack: (trackId: number) => void;
   /** Refresh a track's metadata in the queue after an edit. */
   updateTrack: (track: Track) => void;
+  /** Bring back the queue and position saved before the last reload (once), paused. Call when the library has loaded. */
+  restore: (library: Track[]) => void;
+}
+
+/** Playback position lives apart from the rest so its four-times-a-second updates only re-render what shows the clock. */
+interface PlayerTime {
+  currentTime: number;
+  duration: number;
 }
 
 const PlayerContext = createContext<PlayerApi | null>(null);
+const PlayerTimeContext = createContext<PlayerTime>({ currentTime: 0, duration: 0 });
 
-const VOLUME_KEY = 'musik:volume';
-
-function shuffled<T>(items: T[]): T[] {
-  const out = [...items];
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [out[i], out[j]] = [out[j], out[i]];
-  }
-  return out;
-}
+const SAVE_INTERVAL_MS = 5000;
 
 export function PlayerProvider({ children }: { children: ReactNode }) {
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  if (!audioRef.current) {
-    audioRef.current = new Audio();
-    audioRef.current.preload = 'metadata';
-  }
-  const audio = audioRef.current;
+  const audio = getAudioElement();
 
-  const [state, setState] = useState<PlayerState>(() => ({
-    queue: [],
-    index: -1,
-    playing: false,
-    currentTime: 0,
-    duration: 0,
-    volume: normalizeVolume(localStorage.getItem(VOLUME_KEY)),
-    shuffle: false,
-    repeat: 'off',
-    sleep: null,
-  }));
-  // Event handlers (audio events, Media Session) need the latest state without re-binding.
-  const stateRef = useRef(state);
-  stateRef.current = state;
+  const [q, setQ] = useState<Q.QueueState>(Q.emptyQueue);
+  // Every queue change is computed from this ref and committed through `commit`, so back-to-back calls in one tick
+  // (two quick key presses) build on each other instead of on a stale render.
+  const qRef = useRef(q);
+  const commit = useCallback((next: Q.QueueState) => {
+    qRef.current = next;
+    setQ(next);
+  }, []);
 
-  const current = state.index >= 0 ? (state.queue[state.index] ?? null) : null;
+  const [playing, setPlaying] = useState(false);
+  const [time, setTime] = useState<PlayerTime>({ currentTime: 0, duration: 0 });
+  const [volume, setVolumeState] = useState(() => audio.volume);
+  const [muted, setMuted] = useState(false);
+  const [sleep, setSleepState] = useState<SleepTimer>(null);
+  const [playbackError, setPlaybackError] = useState<PlaybackError | null>(null);
 
-  const goTo = useCallback(
-    (index: number) => {
-      setState((s) => ({ ...s, index, currentTime: 0, playing: true }));
+  /** Whether the next load should start playing (false only when restoring a saved session). */
+  const autoplayRef = useRef(true);
+  const pendingSeekRef = useRef(0);
+  /** Tracks that failed in a row; when every queued track has failed the player stops instead of cycling forever. */
+  const failuresRef = useRef(0);
+  const restoredRef = useRef(false);
+  const persistOn = useRef(false);
+
+  const current = q.index >= 0 ? (q.queue[q.index] ?? null) : null;
+
+  const begin = useCallback(() => {
+    autoplayRef.current = true;
+    failuresRef.current = 0;
+    persistOn.current = true;
+  }, []);
+
+  const halt = useCallback(() => {
+    audio.pause();
+    audio.removeAttribute('src');
+    setPlaying(false);
+    setTime({ currentTime: 0, duration: 0 });
+  }, [audio]);
+
+  const playQueue = useCallback(
+    (tracks: Track[], startIndex: number) => {
+      begin();
+      commit(Q.startQueue(qRef.current, tracks, startIndex));
     },
-    [],
+    [begin, commit],
+  );
+
+  const shufflePlay = useCallback(
+    (tracks: Track[]) => {
+      begin();
+      commit(Q.shuffleAll(qRef.current, tracks));
+    },
+    [begin, commit],
   );
 
   const next = useCallback(() => {
-    const { queue, index, repeat } = stateRef.current;
-    if (queue.length === 0) return;
-    if (index + 1 < queue.length) goTo(index + 1);
-    else if (repeat === 'all') goTo(0);
-    else {
+    const { state, stop } = Q.advance(qRef.current);
+    if (stop) {
       audio.pause();
       audio.currentTime = 0;
-      setState((s) => ({ ...s, playing: false, currentTime: 0 }));
+      setPlaying(false);
+      setTime((t) => ({ ...t, currentTime: 0 }));
+      return;
     }
-  }, [audio, goTo]);
+    autoplayRef.current = true;
+    commit(state);
+  }, [audio, commit]);
 
   const prev = useCallback(() => {
-    const { queue, index } = stateRef.current;
-    if (queue.length === 0) return;
+    if (qRef.current.queue.length === 0) return;
     // Standard behaviour: restart the track unless we're right at its start.
-    if (audio.currentTime > 3 || index === 0) {
+    if (audio.currentTime > 3) {
       audio.currentTime = 0;
       return;
     }
-    goTo(index - 1);
-  }, [audio, goTo]);
+    const back = Q.previous(qRef.current);
+    if (!back) {
+      audio.currentTime = 0;
+      return;
+    }
+    autoplayRef.current = true;
+    commit(back);
+  }, [audio, commit]);
+
+  const playAt = useCallback(
+    (index: number) => {
+      begin();
+      commit(Q.jumpTo(qRef.current, index));
+    },
+    [begin, commit],
+  );
 
   const toggle = useCallback(() => {
-    if (!stateRef.current.queue.length) return;
-    if (audio.paused) void audio.play().catch(() => {});
-    else audio.pause();
+    if (qRef.current.index < 0) return;
+    if (audio.paused) {
+      void audio.play().catch((e: DOMException) => {
+        if (e.name !== 'AbortError') setPlaying(false);
+      });
+    } else audio.pause();
   }, [audio]);
 
   const seek = useCallback(
     (seconds: number) => {
-      audio.currentTime = seconds;
-      setState((s) => ({ ...s, currentTime: seconds }));
+      const limit = Number.isFinite(audio.duration) ? audio.duration : Infinity;
+      const target = Math.max(0, Math.min(seconds, limit));
+      audio.currentTime = target;
+      setTime((t) => ({ ...t, currentTime: target }));
     },
     [audio],
   );
+
+  const seekBy = useCallback((delta: number) => seek(audio.currentTime + delta), [audio, seek]);
 
   const setVolume = useCallback(
-    (volume: number) => {
-      const safeVolume = normalizeVolume(volume);
-      audio.volume = safeVolume;
-      localStorage.setItem(VOLUME_KEY, String(safeVolume));
-      setState((s) => ({ ...s, volume: safeVolume }));
+    (next: number) => {
+      const safe = normalizeVolume(next);
+      audio.volume = safe;
+      audio.muted = false;
+      setMuted(false);
+      writeStored(VOLUME_KEY, String(safe));
+      setVolumeState(safe);
     },
     [audio],
   );
 
-  const playQueue = useCallback((tracks: Track[], startIndex: number) => {
-    setState((s) => {
-      if (!s.shuffle) return { ...s, queue: tracks, index: startIndex, currentTime: 0, playing: true };
-      const first = tracks[startIndex];
-      const rest = shuffled(tracks.filter((_, i) => i !== startIndex));
-      return { ...s, queue: [first, ...rest], index: 0, currentTime: 0, playing: true };
-    });
-  }, []);
-
-  const shufflePlay = useCallback((tracks: Track[]) => {
-    if (tracks.length === 0) return;
-    setState((s) => ({ ...s, shuffle: true, queue: shuffled(tracks), index: 0, currentTime: 0, playing: true }));
-  }, []);
+  const toggleMute = useCallback(() => {
+    audio.muted = !audio.muted;
+    setMuted(audio.muted);
+  }, [audio]);
 
   const setSleep = useCallback((value: number | 'track' | null) => {
-    setState((s) => ({
-      ...s,
-      sleep: value === null ? null : value === 'track' ? { kind: 'track' } : { kind: 'minutes', endsAt: Date.now() + value * 60_000 },
-    }));
+    setSleepState(value === null ? null : value === 'track' ? { kind: 'track' } : { kind: 'minutes', endsAt: Date.now() + value * 60_000 });
   }, []);
 
-  const toggleShuffle = useCallback(() => {
-    setState((s) => {
-      const shuffle = !s.shuffle;
-      if (!shuffle || s.index < 0) return { ...s, shuffle };
-      // Keep the playing track first, shuffle the rest.
-      const cur = s.queue[s.index];
-      return { ...s, shuffle, queue: [cur, ...shuffled(s.queue.filter((_, i) => i !== s.index))], index: 0 };
-    });
-  }, []);
-
-  const cycleRepeat = useCallback(() => {
-    setState((s) => ({ ...s, repeat: s.repeat === 'off' ? 'all' : s.repeat === 'all' ? 'one' : 'off' }));
-  }, []);
-
-  const removeTrack = useCallback(
-    (trackId: number) => {
-      setState((s) => {
-        const removedIndex = s.queue.findIndex((t) => t.id === trackId);
-        if (removedIndex === -1) return s;
-        const queue = s.queue.filter((t) => t.id !== trackId);
-        if (removedIndex === s.index) {
-          audio.pause();
-          audio.removeAttribute('src');
-          return { ...s, queue, index: -1, playing: false, currentTime: 0, duration: 0 };
-        }
-        return { ...s, queue, index: removedIndex < s.index ? s.index - 1 : s.index };
-      });
-    },
-    [audio],
-  );
-
-  const playAt = useCallback((index: number) => {
-    setState((s) => (index < 0 || index >= s.queue.length ? s : { ...s, index, currentTime: 0, playing: true }));
-  }, []);
-
-  const moveInQueue = useCallback((from: number, to: number) => {
-    setState((s) => {
-      const queue = moveItem(s.queue, from, to);
-      if (queue === s.queue) return s;
-      // Follow the track that is playing rather than the position it used to sit at.
-      const playingTrack = s.queue[s.index];
-      return { ...s, queue, index: playingTrack ? queue.indexOf(playingTrack) : s.index };
-    });
-  }, []);
+  const toggleShuffle = useCallback(() => commit(Q.setShuffle(qRef.current, !qRef.current.shuffle)), [commit]);
+  const cycleRepeat = useCallback(() => commit(Q.cycleRepeat(qRef.current)), [commit]);
+  const moveInQueue = useCallback((from: number, to: number) => commit(Q.reorder(qRef.current, from, to)), [commit]);
+  const updateTrack = useCallback((track: Track) => commit(Q.updateTrack(qRef.current, track)), [commit]);
 
   const removeAt = useCallback(
     (index: number) => {
-      setState((s) => {
-        if (index < 0 || index >= s.queue.length) return s;
-        const queue = s.queue.filter((_, i) => i !== index);
-        if (index === s.index) {
-          // Dropping what is playing: stop rather than silently jumping to another song.
-          audio.pause();
-          audio.removeAttribute('src');
-          return { ...s, queue, index: -1, playing: false, currentTime: 0, duration: 0 };
-        }
-        return { ...s, queue, index: index < s.index ? s.index - 1 : s.index };
-      });
+      const { state, removedCurrent } = Q.dropAt(qRef.current, index);
+      if (state === qRef.current) return;
+      commit(state);
+      if (removedCurrent) halt();
     },
-    [audio],
+    [commit, halt],
   );
 
-  const updateTrack = useCallback((track: Track) => {
-    setState((s) => ({ ...s, queue: s.queue.map((t) => (t.id === track.id ? track : t)) }));
-  }, []);
+  const removeTrack = useCallback(
+    (trackId: number) => {
+      const { state, removedCurrent } = Q.dropTrack(qRef.current, trackId);
+      if (state === qRef.current) return;
+      commit(state);
+      if (removedCurrent) halt();
+    },
+    [commit, halt],
+  );
 
-  // Load + play whenever the current track changes.
+  const restore = useCallback(
+    (library: Track[]) => {
+      if (restoredRef.current) return;
+      restoredRef.current = true;
+      if (qRef.current.queue.length === 0) {
+        const saved = parseSavedPlayback(readStored(PLAYBACK_KEY));
+        const restored = saved ? restorePlayback(saved, library) : null;
+        if (restored) {
+          autoplayRef.current = false;
+          pendingSeekRef.current = restored.position;
+          commit({ ...restored.state, token: qRef.current.token + 1 });
+        }
+      }
+      persistOn.current = true;
+    },
+    [commit],
+  );
+
+  // Load the current track whenever playback of it has to (re)start: a different track, or the same one again.
   const currentId = current?.id ?? null;
   useEffect(() => {
     if (currentId === null) return;
     audio.src = api.streamUrl(currentId);
-    audio.volume = stateRef.current.volume;
-    void audio.play().catch(() => setState((s) => ({ ...s, playing: false })));
-  }, [audio, currentId]);
+    const seekTo = pendingSeekRef.current;
+    pendingSeekRef.current = 0;
+    if (seekTo > 0) {
+      audio.addEventListener(
+        'loadedmetadata',
+        () => {
+          audio.currentTime = seekTo;
+          setTime((t) => ({ ...t, currentTime: seekTo }));
+        },
+        { once: true },
+      );
+    }
+    if (autoplayRef.current) {
+      // A newer load interrupting this one rejects with AbortError; that is not "stopped".
+      void audio.play().catch((e: DOMException) => {
+        if (e.name !== 'AbortError') setPlaying(false);
+      });
+    }
+    autoplayRef.current = true;
+  }, [audio, currentId, q.token]);
+
+  // The 'track' sleep timer is read from a ref so the ended handler does not need re-binding when it changes.
+  const sleepRef = useLatest(sleep);
 
   // Mirror audio element events into state.
   useEffect(() => {
-    const onTime = () => setState((s) => ({ ...s, currentTime: audio.currentTime }));
-    const onDuration = () => setState((s) => ({ ...s, duration: audio.duration || 0 }));
-    const onPlay = () => setState((s) => ({ ...s, playing: true }));
-    const onPause = () => setState((s) => ({ ...s, playing: false }));
+    const onTime = () => setTime((t) => ({ ...t, currentTime: audio.currentTime }));
+    const onDuration = () => setTime((t) => ({ ...t, duration: Number.isFinite(audio.duration) ? audio.duration : 0 }));
+    const onPlay = () => setPlaying(true);
+    const onPause = () => setPlaying(false);
+    const onPlaying = () => {
+      failuresRef.current = 0;
+    };
     const onEnded = () => {
-      if (stateRef.current.sleep?.kind === 'track') {
-        setState((s) => ({ ...s, playing: false, sleep: null }));
+      if (sleepRef.current?.kind === 'track') {
+        setPlaying(false);
+        setSleepState(null);
         return;
       }
-      if (stateRef.current.repeat === 'one') {
+      if (qRef.current.repeat === 'one') {
         audio.currentTime = 0;
         void audio.play().catch(() => {});
       } else next();
+    };
+    const onError = () => {
+      // Clearing the source (a removed track) is not a failure.
+      if (!audio.getAttribute('src') || !audio.error) return;
+      const failed = qRef.current.queue[qRef.current.index];
+      setPlaybackError({ title: failed?.title ?? '', nonce: Date.now() });
+      failuresRef.current += 1;
+      if (failuresRef.current >= qRef.current.queue.length) {
+        setPlaying(false);
+        return;
+      }
+      next();
     };
     audio.addEventListener('timeupdate', onTime);
     audio.addEventListener('durationchange', onDuration);
     audio.addEventListener('play', onPlay);
     audio.addEventListener('pause', onPause);
+    audio.addEventListener('playing', onPlaying);
     audio.addEventListener('ended', onEnded);
+    audio.addEventListener('error', onError);
     return () => {
       audio.removeEventListener('timeupdate', onTime);
       audio.removeEventListener('durationchange', onDuration);
       audio.removeEventListener('play', onPlay);
       audio.removeEventListener('pause', onPause);
+      audio.removeEventListener('playing', onPlaying);
       audio.removeEventListener('ended', onEnded);
+      audio.removeEventListener('error', onError);
     };
-  }, [audio, next]);
+  }, [audio, next, sleepRef]);
 
   // Sleep timer: pause when the deadline passes.
-  const sleepEndsAt = state.sleep?.kind === 'minutes' ? state.sleep.endsAt : null;
+  const sleepEndsAt = sleep?.kind === 'minutes' ? sleep.endsAt : null;
   useEffect(() => {
     if (sleepEndsAt === null) return;
     const id = window.setTimeout(() => {
       audio.pause();
-      setState((s) => ({ ...s, sleep: null }));
+      setSleepState(null);
     }, Math.max(0, sleepEndsAt - Date.now()));
     return () => window.clearTimeout(id);
   }, [audio, sleepEndsAt]);
@@ -298,13 +364,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
     const apply = () => {
+      const cover = current ? api.coverUrl(current) : null;
       navigator.mediaSession.metadata = current
         ? new MediaMetadata({
             title: current.title,
             artist: current.artist || 'Musik',
             album: current.album,
-            artwork: current.cover
-              ? [{ src: `${location.origin}${api.coverUrl(current)}`, sizes: '512x512' }]
+            artwork: cover
+              ? [{ src: `${location.origin}${cover}`, sizes: '512x512' }]
               : [
                   { src: `${location.origin}/icon-192.png`, sizes: '192x192', type: 'image/png' },
                   { src: `${location.origin}/icon-512.png`, sizes: '512x512', type: 'image/png' },
@@ -323,24 +390,73 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
-    navigator.mediaSession.playbackState = current ? (state.playing ? 'playing' : 'paused') : 'none';
-    if (current && Number.isFinite(state.duration) && state.duration > 0) {
+    navigator.mediaSession.playbackState = current ? (playing ? 'playing' : 'paused') : 'none';
+  }, [current, playing]);
+
+  // The OS extrapolates the position from a starting point, so it only needs telling when playback jumps or changes
+  // state, not on every tick.
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    const sync = () => {
+      const duration = audio.duration;
+      if (!current || !Number.isFinite(duration) || duration <= 0) return;
       try {
-        navigator.mediaSession.setPositionState({
-          duration: state.duration,
-          position: Math.min(state.currentTime, state.duration),
-          playbackRate: 1,
-        });
+        navigator.mediaSession.setPositionState({ duration, position: Math.min(audio.currentTime, duration), playbackRate: audio.playbackRate || 1 });
       } catch {
         // Some browsers throw on transiently inconsistent values.
       }
+    };
+    sync();
+    const events = ['playing', 'pause', 'seeked', 'durationchange', 'ratechange'] as const;
+    events.forEach((name) => audio.addEventListener(name, sync));
+    return () => events.forEach((name) => audio.removeEventListener(name, sync));
+  }, [audio, current]);
+
+  // Remember the queue and position so a reload (or a phone reclaiming the tab) picks up where it left off.
+  const persist = useCallback(() => {
+    if (!persistOn.current) return;
+    if (qRef.current.queue.length === 0) removeStored(PLAYBACK_KEY);
+    else writeStored(PLAYBACK_KEY, JSON.stringify(serializePlayback(qRef.current, audio.currentTime)));
+  }, [audio]);
+
+  useEffect(() => {
+    const id = window.setTimeout(persist, 400);
+    return () => window.clearTimeout(id);
+  }, [q.queue, q.index, q.shuffle, q.repeat, persist]);
+
+  useEffect(() => {
+    if (!playing) {
+      persist();
+      return;
     }
-  }, [current, state.playing, state.currentTime, state.duration]);
+    const id = window.setInterval(persist, SAVE_INTERVAL_MS);
+    return () => window.clearInterval(id);
+  }, [playing, persist]);
+
+  useEffect(() => {
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') persist();
+    };
+    window.addEventListener('pagehide', persist);
+    document.addEventListener('visibilitychange', onHide);
+    return () => {
+      window.removeEventListener('pagehide', persist);
+      document.removeEventListener('visibilitychange', onHide);
+    };
+  }, [persist]);
 
   const value = useMemo<PlayerApi>(
     () => ({
-      ...state,
+      queue: q.queue,
+      index: q.index,
       current,
+      playing,
+      volume,
+      muted,
+      shuffle: q.shuffle,
+      repeat: q.repeat,
+      sleep,
+      playbackError,
       playQueue,
       shufflePlay,
       setSleep,
@@ -348,7 +464,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       next,
       prev,
       seek,
+      seekBy,
       setVolume,
+      toggleMute,
       toggleShuffle,
       cycleRepeat,
       playAt,
@@ -356,10 +474,19 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       removeAt,
       removeTrack,
       updateTrack,
+      restore,
     }),
     [
-      state,
+      q.queue,
+      q.index,
+      q.shuffle,
+      q.repeat,
       current,
+      playing,
+      volume,
+      muted,
+      sleep,
+      playbackError,
       playQueue,
       shufflePlay,
       setSleep,
@@ -367,7 +494,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       next,
       prev,
       seek,
+      seekBy,
       setVolume,
+      toggleMute,
       toggleShuffle,
       cycleRepeat,
       playAt,
@@ -375,14 +504,25 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       removeAt,
       removeTrack,
       updateTrack,
+      restore,
     ],
   );
 
-  return <PlayerContext.Provider value={value}>{children}</PlayerContext.Provider>;
+  return (
+    <PlayerContext.Provider value={value}>
+      <PlayerTimeContext.Provider value={time}>{children}</PlayerTimeContext.Provider>
+    </PlayerContext.Provider>
+  );
 }
 
+/** Everything about the player except the moving clock; re-renders only when something the user can see changes. */
 export function usePlayer(): PlayerApi {
   const ctx = useContext(PlayerContext);
   if (!ctx) throw new Error('usePlayer must be used inside PlayerProvider');
   return ctx;
+}
+
+/** Position and length of the current track; updates several times a second, so use it only where the clock is shown. */
+export function usePlayerTime(): PlayerTime {
+  return useContext(PlayerTimeContext);
 }

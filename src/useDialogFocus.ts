@@ -1,13 +1,12 @@
 import { useEffect, useRef } from 'react';
+import { useLatest } from './useLatest';
 
 const FOCUSABLE = 'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [href], [tabindex]:not([tabindex="-1"])';
 
 export function useDialogFocus<T extends HTMLElement>(onClose: () => void, preventClose = false) {
   const ref = useRef<T>(null);
-  const onCloseRef = useRef(onClose);
-  const preventCloseRef = useRef(preventClose);
-  onCloseRef.current = onClose;
-  preventCloseRef.current = preventClose;
+  const onCloseRef = useLatest(onClose);
+  const preventCloseRef = useLatest(preventClose);
 
   useEffect(() => {
     const dialog = ref.current;
@@ -39,6 +38,6 @@ export function useDialogFocus<T extends HTMLElement>(onClose: () => void, preve
       dialog.removeEventListener('keydown', onKeyDown);
       previous?.focus();
     };
-  }, []);
+  }, [onCloseRef, preventCloseRef]);
   return ref;
 }

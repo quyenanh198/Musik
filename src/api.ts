@@ -20,12 +20,39 @@ const json = (method: string, body: unknown): RequestInit => ({
   body: JSON.stringify(body),
 });
 
+/**
+ * fetch cannot report upload progress, XMLHttpRequest can. `onProgress` gets 0..1 as the bytes leave the browser.
+ */
+function uploadWithProgress<T>(url: string, form: FormData, onProgress?: (fraction: number) => void): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    xhr.responseType = 'text';
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) onProgress?.(event.loaded / event.total);
+    };
+    xhr.onerror = () => reject(new Error('Network error'));
+    xhr.onabort = () => reject(new Error('Upload cancelled'));
+    xhr.onload = () => {
+      let body: unknown = null;
+      try {
+        body = JSON.parse(xhr.responseText);
+      } catch {
+        // Non-JSON body: fall back to the status text below.
+      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body as T);
+      else reject(new Error((body as { error?: string } | null)?.error ?? (xhr.statusText || `HTTP ${xhr.status}`)));
+    };
+    xhr.send(form);
+  });
+}
+
 export const api = {
   listTracks: () => request<Track[]>('/api/tracks'),
-  uploadTrack: (file: File) => {
+  uploadTrack: (file: File, onProgress?: (fraction: number) => void) => {
     const form = new FormData();
     form.append('file', file);
-    return request<Track>('/api/tracks', { method: 'POST', body: form });
+    return uploadWithProgress<Track>('/api/tracks', form, onProgress);
   },
   updateTrack: (id: number, patch: TrackPatch) => request<Track>(`/api/tracks/${id}`, json('PATCH', patch)),
   uploadCover: (id: number, file: File) => {
@@ -60,16 +87,24 @@ export const api = {
     request<void>(`/api/playlists/${playlistId}/tracks/${trackId}`, { method: 'DELETE' }),
   removeManyFromPlaylist: (playlistId: number, trackIds: number[]) =>
     request<PlaylistDetail & { removed: number }>(`/api/playlists/${playlistId}/tracks/remove`, json('POST', { trackIds })),
+  /** Put one track at `toIndex` (0 = first); returns the playlist in its new order. */
+  moveInPlaylist: (playlistId: number, trackId: number, toIndex: number) =>
+    request<PlaylistDetail>(`/api/playlists/${playlistId}/tracks/move`, json('POST', { trackId, toIndex })),
 
   /** Which external sources the server can import from (AudioExtract results). */
   importSources: () => request<{ audioextract: boolean }>('/api/import/sources'),
   listAudioExtract: () => request<RemoteFile[]>('/api/import/audioextract'),
-  /** `title` overrides the tag/filename for that import. */
-  importFromAudioExtract: (items: { path: string; title?: string }[], playlistId?: number) =>
-    request<ImportResult>(
-      '/api/import/audioextract',
-      json('POST', { items, playlistId: playlistId ?? null }),
-    ),
+  /**
+   * `title` overrides the tag/filename for that import. The server answers 502 when nothing could be imported but
+   * still sends the per-file reasons in the body; those are returned like any other result instead of being
+   * flattened into "Bad Gateway".
+   */
+  importFromAudioExtract: async (items: { path: string; title?: string }[], playlistId?: number): Promise<ImportResult> => {
+    const res = await fetch('/api/import/audioextract', json('POST', { items, playlistId: playlistId ?? null }));
+    const body = (await res.json().catch(() => null)) as (Partial<ImportResult> & { error?: string }) | null;
+    if (body && Array.isArray(body.imported) && Array.isArray(body.failed) && Array.isArray(body.skipped)) return body as ImportResult;
+    throw new Error(body?.error ?? res.statusText);
+  },
 };
 
 /** Editable tag fields; `year: null` clears it. */

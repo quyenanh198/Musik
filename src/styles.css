@@ -178,3 +178,107 @@
   .sheet__art { width: min(34vh, 200px); }
   .sheet__body { gap: 10px; }
 }
+
+/* ---- Toasts: stacked, each with its own close button; errors are red-tinted and stay longer ---- */
+.toasts {
+  position: fixed;
+  z-index: 30;
+  bottom: calc(var(--player-h) + 18px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(90vw, 560px);
+  display: grid;
+  gap: 8px;
+  pointer-events: none;
+}
+.toasts .toast {
+  position: static;
+  transform: none;
+  max-width: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  pointer-events: auto;
+}
+.toast--error { background: var(--danger); color: #fff; }
+.toast__close {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font-size: 18px;
+  line-height: 1;
+}
+.toast__close:hover { background: rgb(255 255 255 / 20%); }
+@media (max-width: 800px) {
+  .toasts { bottom: calc(var(--player-h) + 12px); }
+}
+
+/* ---- Upload progress and the failed-files list ---- */
+.upload-status {
+  position: sticky;
+  top: -38px; /* sits under the top edge of the scrolling page, above its content */
+  z-index: 4;
+  margin: -12px 0 18px;
+  display: grid;
+  gap: 10px;
+}
+.upload-status > div {
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px);
+}
+.upload-status__line { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.upload-status__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upload-status__failures { border-color: var(--danger); }
+.upload-status__failures ul { margin: 0; padding-left: 18px; font-size: 12px; }
+.progress { height: 6px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+.progress__bar { height: 100%; border-radius: inherit; background: var(--accent); transition: width 120ms linear; }
+
+/* ---- Drop audio files anywhere ---- */
+.dropzone {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: blur(4px);
+  pointer-events: none;
+}
+.dropzone__box {
+  padding: 40px clamp(24px, 6vw, 72px);
+  border: 3px dashed var(--accent);
+  border-radius: 20px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: clamp(18px, 3vw, 26px);
+  font-weight: 650;
+  text-align: center;
+}
+
+/* ---- Logo: the gradient note replaces the old letter badge ---- */
+.brand__mark { display: block; width: 34px; height: 34px; border-radius: 0; background: none; object-fit: contain; }
+
+/* ---- Sorting, theme and language pickers ---- */
+.sort { display: flex; align-items: center; gap: 2px; }
+.sort .select { max-width: 170px; }
+.theme-picker { gap: 10px; }
+.theme-picker label { display: grid; gap: 6px; }
+.import-failures { margin: 6px 0 0; padding-left: 18px; }
+@media (max-width: 800px) {
+  .theme-picker { display: flex; gap: 6px; }
+  .theme-picker label { display: block; }
+  .theme-picker select { width: auto; max-width: 96px; }
+  .sidebar { padding-right: 214px; }
+  .sort { order: 3; }
+}
