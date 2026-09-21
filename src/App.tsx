@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Playlist, Track } from '../shared/types';
 import { api } from './api';
+import { IconPlus } from './components/Icons';
 import { Library, type LoadStatus } from './components/Library';
 import { PlayerBar } from './components/PlayerBar';
 import { PlaylistView } from './components/PlaylistView';
@@ -327,7 +328,7 @@ export function App() {
         <div className="sidebar__heading">
           <span>{t('nav.playlists')}</span>
           <button className="icon" onClick={() => setNewPlaylistName('')} title={t('playlist.new')} aria-label={t('playlist.new')}>
-            +
+            <IconPlus size={16} />
           </button>
         </div>
         {newPlaylistName !== null && (

@@ -3,6 +3,19 @@ import { api, formatDuration } from '../api';
 import { useI18n } from '../I18nProvider';
 import { REPEAT_LABEL_KEY } from '../i18n';
 import { usePlayer } from '../player/PlayerProvider';
+import {
+  IconChevronUp,
+  IconMoon,
+  IconPause,
+  IconPlay,
+  IconRepeat,
+  IconRepeatOne,
+  IconShuffle,
+  IconSkipBack,
+  IconSkipForward,
+  IconVolume,
+  IconVolumeMute,
+} from './Icons';
 import { NowPlaying } from './NowPlaying';
 import { SeekBar } from './SeekBar';
 
@@ -30,7 +43,9 @@ function SleepTimer() {
 
   return (
     <label className={`sleep ${p.sleep ? 'sleep--active' : ''}`} title={t('sleep.label')}>
-      <span aria-hidden>⏾</span>
+      <span aria-hidden className="sleep__icon">
+        <IconMoon size={16} />
+      </span>
       <select
         className="select"
         aria-label={t('sleep.label')}
@@ -110,7 +125,7 @@ export function PlayerBar() {
               </div>
               <div className="player__artist">{p.current.artist || t('common.unknownArtist')}</div>
               <span className="player__expand" aria-hidden>
-                ⌃
+                <IconChevronUp size={16} />
               </span>
             </>
           ) : (
@@ -121,23 +136,23 @@ export function PlayerBar() {
         <div className="player__center">
           <div className="player__controls">
             <button className={`icon ${p.shuffle ? 'icon--active' : ''}`} onClick={p.toggleShuffle} title={t('player.shuffle')} aria-pressed={p.shuffle}>
-              ⇄
+              <IconShuffle size={18} />
             </button>
             <button className="icon" onClick={p.prev} disabled={disabled} title={t('player.previous')}>
-              ⏮
+              <IconSkipBack size={18} />
             </button>
             <button className="icon icon--big" onClick={p.toggle} disabled={disabled} title={p.playing ? t('player.pause') : t('player.play')}>
-              {p.playing ? '⏸' : '▶'}
+              {p.playing ? <IconPause size={20} /> : <IconPlay size={20} />}
             </button>
             <button className="icon" onClick={p.next} disabled={disabled} title={t('player.next')}>
-              ⏭
+              <IconSkipForward size={18} />
             </button>
             <button
               className={`icon ${p.repeat !== 'off' ? 'icon--active' : ''}`}
               onClick={p.cycleRepeat}
               title={t('player.repeat', { mode: t(REPEAT_LABEL_KEY[p.repeat]) })}
             >
-              {p.repeat === 'one' ? '↻¹' : '↻'}
+              {p.repeat === 'one' ? <IconRepeatOne size={18} /> : <IconRepeat size={18} />}
             </button>
           </div>
           <div className="player__seek">
@@ -148,7 +163,7 @@ export function PlayerBar() {
         <div className="player__volume">
           <SleepTimer />
           <button className="icon" onClick={p.toggleMute} title={t('player.mute')} aria-pressed={p.muted}>
-            {p.muted || p.volume === 0 ? '🔇' : '🔊'}
+            {p.muted || p.volume === 0 ? <IconVolumeMute size={18} /> : <IconVolume size={18} />}
           </button>
           <input
             type="range"

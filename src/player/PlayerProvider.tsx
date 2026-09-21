@@ -7,7 +7,7 @@ import { api } from '../api';
 import { normalizeVolume } from '../preferences';
 import { readStored, removeStored, writeStored } from '../storage';
 import { useLatest } from '../useLatest';
-import { getAudioElement, VOLUME_KEY } from './audio';
+import { getAudioElement, getPreloadAudioElement, VOLUME_KEY } from './audio';
 import { PLAYBACK_KEY, parseSavedPlayback, restorePlayback, serializePlayback } from './persistence';
 import * as Q from './queueState';
 
@@ -276,7 +276,15 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       });
     }
     autoplayRef.current = true;
-  }, [audio, currentId, q.token]);
+
+    // Pre-buffer the next track in the queue using the dedicated preload element
+    const nextIndex = q.index + 1;
+    const nextTrack = nextIndex < q.queue.length ? q.queue[nextIndex] : q.repeat === 'all' && q.queue.length > 0 ? q.queue[0] : null;
+    if (nextTrack) {
+      const preloader = getPreloadAudioElement();
+      preloader.src = api.streamUrl(nextTrack.id);
+    }
+  }, [audio, currentId, q.token, q.index, q.queue, q.repeat]);
 
   // The 'track' sleep timer is read from a ref so the ended handler does not need re-binding when it changes.
   const sleepRef = useLatest(sleep);

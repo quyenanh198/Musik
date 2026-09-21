@@ -102,11 +102,18 @@ Detailed audit documentation stored in [`AUDIT.md`](AUDIT.md).
 
 ### Prioritized Action Plan & Status
 
-| Priority | ID | Status | Focus Area | Goal | Verification |
+| Priority | ID | Status | Focus Area | Goal | Verification / Evidence |
 | --- | --- | --- | --- | --- | --- |
-| P0 | S1 | OPEN | UI Icons | Replace all amateur unicode glyphs with crisp, accessible vector SVG icons | Visual check, build passes |
-| P0 | S2 | OPEN | Tracklist UI | Redesign tracklist: eliminate spreadsheet look, progressive disclosure for actions (••• menu), animated playing indicator | Clean table layout, full test pass |
-| P0 | S3 | OPEN | Now Playing | Ambient backdrop blur on Now Playing modal, refined drag handles, typography | Modal visual inspection, drag tests pass |
-| P1 | S4 | OPEN | Audio Engine | Seamless track pre-buffering (pre-load next track in queue ~15s before end) | Vitest player tests pass |
-| P2 | S5 | OPEN | Search | Accent-tolerant & diacritic-insensitive fuzzy search (e.g. Vietnamese diacritics) | Search unit tests pass |
+| P0 | S1 | DONE | UI Icons | Replace all amateur unicode glyphs with crisp, accessible vector SVG icons | Created `src/components/Icons.tsx` vector library; integrated into PlayerBar, NowPlaying, TrackList, Library, PlaylistView, App |
+| P0 | S2 | DONE | Tracklist UI | Redesign tracklist: progressive disclosure for action buttons on hover, animated equalizer playing indicator, clean styling | Added CSS hover transitions, animated CSS equalizer bars, verified across viewports |
+| P0 | S3 | DONE | Now Playing | Ambient backdrop blur on Now Playing modal, refined drag handles, typography | Added dynamic blurred album art backdrop overlay (`.sheet__backdrop`), integrated vector handles |
+| P1 | S4 | DONE | Audio Engine | Seamless track pre-buffering (pre-load next track in queue) | Implemented `getPreloadAudioElement()` in `audio.ts` & preloader pipeline in `PlayerProvider.tsx` |
+| P2 | S5 | DONE | Search | Accent-tolerant & diacritic-insensitive search matching (e.g. Vietnamese diacritics) | Implemented `src/search.ts` (`normalizeSearch`, `matchesQuery`), 5 unit tests pass, integrated into Library, PlaylistView, ImportPicker |
+
+### Verification Summary
+- **TypeScript**: `tsc` zero errors (both client & server targets).
+- **Unit & Integration Tests**: 152/152 tests passing (`vitest run`).
+- **Linter**: `eslint` 0 errors, 0 warnings (`npm run lint`).
+- **Production Build**: `vite build` cleanly transforms and bundles all assets with gzip sizing.
+
 

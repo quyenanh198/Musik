@@ -7,6 +7,13 @@ import { usePlayer } from '../player/PlayerProvider';
 import { defaultDirection, parseSort, SORT_KEYS, SORT_STORAGE_KEY, sortTracks, type SortKey, type SortState } from '../sort';
 import { readStored, writeStored } from '../storage';
 import { useToast } from '../toasts';
+import { matchesQuery } from '../search';
+import {
+  IconArrowDown,
+  IconArrowUp,
+  IconDownload,
+  IconShuffle,
+} from './Icons';
 import { ImportPicker } from './ImportPicker';
 import { TrackList, type CoverChange, type TrackPatch } from './TrackList';
 import { UploadButton } from './UploadButton';
@@ -56,8 +63,10 @@ export function Library({
   };
 
   const visible = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const matching = q ? tracks.filter((track) => [track.title, track.artist, track.album].some((s) => s.toLowerCase().includes(q))) : tracks;
+    const q = query.trim();
+    const matching = q
+      ? tracks.filter((track) => [track.title, track.artist, track.album].some((field) => matchesQuery(field, q)))
+      : tracks;
     return sortTracks(matching, sort);
   }, [tracks, query, sort]);
 
@@ -102,16 +111,16 @@ export function Library({
             title={sort.direction === 'asc' ? t('sort.ascending') : t('sort.descending')}
             aria-label={sort.direction === 'asc' ? t('sort.ascending') : t('sort.descending')}
           >
-            {sort.direction === 'asc' ? '↑' : '↓'}
+            {sort.direction === 'asc' ? <IconArrowUp size={16} /> : <IconArrowDown size={16} />}
           </button>
         </div>
         <button className="btn btn--ghost" onClick={() => player.shufflePlay(visible)} disabled={visible.length === 0}>
-          ⇄ {t('library.shuffle')}
+          <IconShuffle size={16} /> {t('library.shuffle')}
         </button>
         <UploadButton onFiles={onUploadFiles} />
         {canImport && (
           <button className="btn btn--ghost" onClick={() => setImporting(true)}>
-            ⤓ {t('import.fromAudioExtract')}
+            <IconDownload size={16} /> {t('import.fromAudioExtract')}
           </button>
         )}
       </header>

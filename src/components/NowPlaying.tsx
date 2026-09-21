@@ -6,6 +6,19 @@ import { usePlayer } from '../player/PlayerProvider';
 import { dropIndex, shiftFor } from '../queueOrder'; // pure drag maths
 import { useDialogFocus } from '../useDialogFocus';
 import { useLatest } from '../useLatest';
+import {
+  IconChevronDown,
+  IconClose,
+  IconGrip,
+  IconMusic,
+  IconPause,
+  IconPlay,
+  IconRepeat,
+  IconRepeatOne,
+  IconShuffle,
+  IconSkipBack,
+  IconSkipForward,
+} from './Icons';
 import { SeekBar } from './SeekBar';
 
 interface Drag {
@@ -123,8 +136,15 @@ export function NowPlaying({ onClose }: { onClose: () => void }) {
       }}
     >
       <div className="sheet__grab" aria-hidden />
+      {cover && (
+        <div
+          className="sheet__backdrop"
+          aria-hidden
+          style={{ backgroundImage: `url(${cover})` }}
+        />
+      )}
       <button className="icon sheet__close" onClick={onClose} title={t('now.collapse')} aria-label={t('now.collapse')}>
-        ⌄
+        <IconChevronDown size={22} />
       </button>
 
       <div className="sheet__body">
@@ -133,7 +153,7 @@ export function NowPlaying({ onClose }: { onClose: () => void }) {
             <img src={cover} alt="" />
           ) : (
             <div className="sheet__art--none" aria-hidden>
-              ♪
+              <IconMusic size={64} />
             </div>
           )}
         </div>
@@ -152,23 +172,23 @@ export function NowPlaying({ onClose }: { onClose: () => void }) {
 
         <div className="sheet__controls">
           <button className={`icon ${p.shuffle ? 'icon--active' : ''}`} onClick={p.toggleShuffle} title={t('player.shuffle')} aria-pressed={p.shuffle}>
-            ⇄
+            <IconShuffle size={20} />
           </button>
           <button className="icon" onClick={p.prev} disabled={!p.current} title={t('player.previous')}>
-            ⏮
+            <IconSkipBack size={20} />
           </button>
           <button className="icon icon--big sheet__play" onClick={p.toggle} disabled={!p.current} title={p.playing ? t('player.pause') : t('player.play')}>
-            {p.playing ? '⏸' : '▶'}
+            {p.playing ? <IconPause size={24} /> : <IconPlay size={24} />}
           </button>
           <button className="icon" onClick={p.next} disabled={!p.current} title={t('player.next')}>
-            ⏭
+            <IconSkipForward size={20} />
           </button>
           <button
             className={`icon ${p.repeat !== 'off' ? 'icon--active' : ''}`}
             onClick={p.cycleRepeat}
             title={t('player.repeat', { mode: t(REPEAT_LABEL_KEY[p.repeat]) })}
           >
-            {p.repeat === 'one' ? '↻¹' : '↻'}
+            {p.repeat === 'one' ? <IconRepeatOne size={20} /> : <IconRepeat size={20} />}
           </button>
         </div>
       </div>
@@ -199,7 +219,7 @@ export function NowPlaying({ onClose }: { onClose: () => void }) {
                     title={t('now.dragToReorder')}
                     aria-label={t('now.reorder', { title: track.title })}
                   >
-                    ⠿
+                    <IconGrip size={16} />
                   </button>
                   <button className="queue__pick" onClick={() => p.playAt(i)} title={t('now.playThis')}>
                     <span className="queue__title">{track.title}</span>
@@ -212,7 +232,7 @@ export function NowPlaying({ onClose }: { onClose: () => void }) {
                     title={t('now.removeFromQueue')}
                     aria-label={t('now.removeFromQueueNamed', { title: track.title })}
                   >
-                    ✕
+                    <IconClose size={16} />
                   </button>
                 </li>
               );

@@ -282,3 +282,97 @@
   .sidebar { padding-right: 214px; }
   .sort { order: 3; }
 }
+
+/* ---- Ambient Album Art Backdrop for Now Playing Sheet ---- */
+.sheet {
+  overflow: hidden;
+  position: fixed;
+}
+.sheet__backdrop {
+  position: absolute;
+  inset: -60px;
+  background-size: cover;
+  background-position: center;
+  filter: blur(60px) saturate(1.8) brightness(0.35);
+  opacity: 0.65;
+  transform: scale(1.1);
+  pointer-events: none;
+  z-index: 0;
+}
+:root[data-theme="light"] .sheet__backdrop {
+  filter: blur(65px) saturate(1.4) brightness(0.85);
+  opacity: 0.35;
+}
+.sheet__body, .sheet__queue, .sheet__close, .sheet__grab {
+  position: relative;
+  z-index: 1;
+}
+
+/* ---- Animated Equalizer Bars in Track Row ---- */
+.tracks__playbtn {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  margin: 0 auto;
+}
+.tracks__playicon {
+  display: none;
+}
+.tracks__row:hover .tracks__index {
+  display: none;
+}
+.tracks__row:hover .tracks__playicon {
+  display: inline-block;
+}
+.equalizer {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 14px;
+  width: 14px;
+}
+.equalizer__bar {
+  width: 3px;
+  background: var(--accent);
+  border-radius: 1px;
+  animation: eq-bounce 1s ease-in-out infinite alternate;
+}
+.equalizer__bar:nth-child(1) { height: 60%; animation-delay: 0.1s; }
+.equalizer__bar:nth-child(2) { height: 100%; animation-delay: 0.35s; }
+.equalizer__bar:nth-child(3) { height: 40%; animation-delay: 0.2s; }
+
+@keyframes eq-bounce {
+  0% { height: 25%; }
+  100% { height: 100%; }
+}
+
+/* ---- Polished Actions and Controls ---- */
+.select--sm {
+  min-height: 32px;
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+.sleep__icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+}
+.sleep--active .sleep__icon {
+  color: var(--accent);
+}
+
+/* ---- Progressive disclosure for tracklist actions ---- */
+@media (min-width: 801px) {
+  .tracks__actions {
+    opacity: 0.15;
+    transition: opacity 160ms ease;
+  }
+  .tracks__row:hover .tracks__actions,
+  .tracks__row--selected .tracks__actions,
+  .tracks__actions:focus-within {
+    opacity: 1;
+  }
+}
+
+

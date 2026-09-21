@@ -5,6 +5,15 @@ import { useI18n } from '../I18nProvider';
 import { usePlayer } from '../player/PlayerProvider';
 import { useDialogFocus } from '../useDialogFocus';
 import { useLatest } from '../useLatest';
+import {
+  IconArrowDown,
+  IconArrowUp,
+  IconClose,
+  IconEdit,
+  IconMusic,
+  IconPlay,
+  IconTrash,
+} from './Icons';
 
 export type { TrackPatch }; // re-exported for callers
 
@@ -70,13 +79,32 @@ const TrackRow = memo(function TrackRow({ track, index, count, isCurrent, isPlay
         <input type="checkbox" checked={selected} onChange={() => actions.toggle(track.id)} aria-label={t('list.select', { title: track.title })} />
       </td>
       <td className="tracks__num">
-        <button className="icon" onClick={() => actions.play(index)} title={t('list.play')} aria-label={t('list.playNamed', { title: track.title })}>
-          {isCurrent && isPlaying ? '♫' : '▶'}
+        <button className="icon tracks__playbtn" onClick={() => actions.play(index)} title={t('list.play')} aria-label={t('list.playNamed', { title: track.title })}>
+          {isCurrent && isPlaying ? (
+            <span className="equalizer" aria-hidden>
+              <span className="equalizer__bar" />
+              <span className="equalizer__bar" />
+              <span className="equalizer__bar" />
+            </span>
+          ) : isCurrent ? (
+            <IconPlay size={16} />
+          ) : (
+            <>
+              <span className="tracks__index">{index + 1}</span>
+              <IconPlay size={16} className="tracks__playicon" />
+            </>
+          )}
         </button>
       </td>
       <td>
         <div className="tracks__titlecell">
-          {cover ? <img className="tracks__cover" src={cover} alt="" loading="lazy" /> : <div className="tracks__cover tracks__cover--none">♪</div>}
+          {cover ? (
+            <img className="tracks__cover" src={cover} alt="" loading="lazy" />
+          ) : (
+            <div className="tracks__cover tracks__cover--none" aria-hidden>
+              <IconMusic size={20} />
+            </div>
+          )}
           <div className="tracks__text">
             <div className="tracks__title">{track.title}</div>
             <div className="muted">
@@ -94,7 +122,7 @@ const TrackRow = memo(function TrackRow({ track, index, count, isCurrent, isPlay
       <td className="tracks__actions">
         {playlists.length > 0 && (
           <select
-            className="select"
+            className="select select--sm"
             value=""
             title={t('list.addToPlaylist')}
             aria-label={t('list.addToPlaylist')}
@@ -113,23 +141,23 @@ const TrackRow = memo(function TrackRow({ track, index, count, isCurrent, isPlay
         {canMove && (
           <>
             <button className="icon" onClick={() => actions.move(track, index - 1)} disabled={index === 0} title={t('list.moveUp')} aria-label={t('list.moveUpNamed', { title: track.title })}>
-              ↑
+              <IconArrowUp size={16} />
             </button>
             <button className="icon" onClick={() => actions.move(track, index + 1)} disabled={index === count - 1} title={t('list.moveDown')} aria-label={t('list.moveDownNamed', { title: track.title })}>
-              ↓
+              <IconArrowDown size={16} />
             </button>
           </>
         )}
         <button className="icon" onClick={() => actions.edit(track)} title={t('list.edit')} aria-label={t('list.editNamed', { title: track.title })}>
-          ✎
+          <IconEdit size={16} />
         </button>
         {canRemove && (
           <button className="icon" onClick={() => actions.remove(track)} title={t('list.removeFromPlaylist')} aria-label={t('list.removeFromPlaylist')}>
-            −
+            <IconClose size={16} />
           </button>
         )}
         <button className="icon icon--danger" onClick={() => actions.del(track)} title={t('list.delete')} aria-label={t('list.deleteNamed', { title: track.title })}>
-          🗑
+          <IconTrash size={16} />
         </button>
       </td>
     </tr>
@@ -224,18 +252,18 @@ export function TrackList({
             </select>
           )}
           <button className="btn btn--ghost" onClick={() => player.playQueue(selectedTracks, 0)}>
-            ▶ {t('list.playN', { n })}
+            <IconPlay size={16} /> {t('list.playN', { n })}
           </button>
           <button className={`btn btn--ghost${bulkEditing ? ' btn--on' : ''}`} onClick={() => setBulkEditing((v) => !v)}>
-            ✎ {t('list.editN', { n })}
+            <IconEdit size={16} /> {t('list.editN', { n })}
           </button>
           {onRemoveMany && (
             <button className="btn btn--ghost" onClick={() => onRemoveMany(selectedTracks)}>
-              − {t('list.removeN', { n })}
+              <IconClose size={16} /> {t('list.removeN', { n })}
             </button>
           )}
           <button className="btn btn--ghost btn--danger" onClick={() => onDeleteMany(selectedTracks)}>
-            🗑 {t('list.deleteN', { n })}
+            <IconTrash size={16} /> {t('list.deleteN', { n })}
           </button>
           <button className="btn btn--ghost" onClick={clear}>
             {t('common.clear')}

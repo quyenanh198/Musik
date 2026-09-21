@@ -1,5 +1,6 @@
 import { useRef } from 'react';
 import { useI18n } from '../I18nProvider';
+import { IconUpload } from './Icons';
 
 interface Props {
   /** Files the user picked; the app-wide uploader takes it from here (progress, playlist, refresh). */
@@ -28,7 +29,7 @@ export function UploadButton({ onFiles, label }: Props) {
         }}
       />
       <button className="btn" onClick={() => inputRef.current?.click()}>
-        {label ?? t('upload.button')}
+        <IconUpload size={16} /> {label ?? t('upload.button')}
       </button>
     </div>
   );

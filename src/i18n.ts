@@ -33,7 +33,7 @@ const en = {
   'playlist.nameLabel': 'Playlist name',
   'playlist.playAll': 'Play all',
   'playlist.addFromLibrary': 'Add from library',
-  'playlist.uploadHere': '⬆ Upload here',
+  'playlist.uploadHere': 'Upload here',
   'playlist.rename': 'Rename',
   'playlist.empty': 'This playlist is empty. Add tracks from the library or upload here.',
 
@@ -54,7 +54,7 @@ const en = {
   'sort.ascending': 'Ascending',
   'sort.descending': 'Descending',
 
-  'upload.button': '⬆ Upload',
+  'upload.button': 'Upload',
   'upload.drop': 'Drop audio files to upload',
   'upload.progress': 'Uploading {done} of {total}',
   'upload.failed': '{n} files could not be uploaded',
@@ -215,7 +215,7 @@ const vi: Record<MessageKey, string> = {
   'playlist.nameLabel': 'Tên danh sách phát',
   'playlist.playAll': 'Phát tất cả',
   'playlist.addFromLibrary': 'Thêm từ thư viện',
-  'playlist.uploadHere': '⬆ Tải lên đây',
+  'playlist.uploadHere': 'Tải lên đây',
   'playlist.rename': 'Đổi tên',
   'playlist.empty': 'Danh sách phát này đang trống. Thêm bài từ thư viện hoặc tải lên tại đây.',
 
@@ -236,7 +236,7 @@ const vi: Record<MessageKey, string> = {
   'sort.ascending': 'Tăng dần',
   'sort.descending': 'Giảm dần',
 
-  'upload.button': '⬆ Tải lên',
+  'upload.button': 'Tải lên',
   'upload.drop': 'Thả tệp âm thanh vào đây để tải lên',
   'upload.progress': 'Đang tải lên {done}/{total}',
   'upload.failed': 'Không tải lên được {n} tệp',

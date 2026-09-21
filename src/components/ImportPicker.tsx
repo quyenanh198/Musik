@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { api, formatSize, type ImportResult, type RemoteFile } from '../api';
 import { useI18n } from '../I18nProvider';
 import { useDialogFocus } from '../useDialogFocus';
+import { matchesQuery } from '../search';
+import { IconEdit } from './Icons';
 
 /** Modal listing finished AudioExtract downloads; ticked files are copied into the library (and playlist, if given). */
 export function ImportPicker({
@@ -36,8 +38,8 @@ export function ImportPicker({
   }, []);
 
   const shown = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return (files ?? []).filter((f) => !q || f.name.toLowerCase().includes(q));
+    const q = query.trim();
+    return (files ?? []).filter((f) => !q || matchesQuery(f.name, q));
   }, [files, query]);
   // Files already in the library can't be picked, so "all" means all the new ones.
   const selectable = useMemo(() => shown.filter((f) => f.trackId === null), [shown]);
@@ -185,7 +187,7 @@ export function ImportPicker({
                       setEditing(f.path);
                     }}
                   >
-                    ✎
+                    <IconEdit size={16} />
                   </button>
                 </div>
               );

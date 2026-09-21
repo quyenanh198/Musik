@@ -4,6 +4,7 @@ import { readStored } from '../storage';
 export const VOLUME_KEY = 'musik:volume';
 
 let element: HTMLAudioElement | null = null;
+let preloadElement: HTMLAudioElement | null = null;
 
 /**
  * The one audio element of the app, created on first use. It is a single long-lived element on purpose: mobile
@@ -18,3 +19,17 @@ export function getAudioElement(): HTMLAudioElement {
   }
   return element;
 }
+
+/**
+ * Dedicated preload audio element to pre-buffer the next track in the queue,
+ * eliminating inter-track gap and latency.
+ */
+export function getPreloadAudioElement(): HTMLAudioElement {
+  if (!preloadElement) {
+    preloadElement = new Audio();
+    preloadElement.preload = 'auto';
+    preloadElement.volume = 0;
+  }
+  return preloadElement;
+}
+

@@ -6,6 +6,13 @@ import { describeImport } from '../importSummary';
 import { usePlayer } from '../player/PlayerProvider';
 import { useToast } from '../toasts';
 import { useDialogFocus } from '../useDialogFocus';
+import { matchesQuery } from '../search';
+import {
+  IconDownload,
+  IconPlay,
+  IconPlus,
+  IconShuffle,
+} from './Icons';
 import { ImportPicker } from './ImportPicker';
 import { TrackList, type CoverChange, type TrackPatch } from './TrackList';
 import { UploadButton } from './UploadButton';
@@ -159,18 +166,18 @@ export function PlaylistView({
         <span className="muted">{t('common.tracks', { n: detail.trackCount })}</span>
         <div className="section__actions">
           <button className="btn" onClick={() => player.playQueue(detail.tracks, 0)} disabled={detail.tracks.length === 0}>
-            ▶ {t('playlist.playAll')}
+            <IconPlay size={16} /> {t('playlist.playAll')}
           </button>
           <button className="btn btn--ghost" onClick={() => player.shufflePlay(detail.tracks)} disabled={detail.tracks.length === 0}>
-            ⇄ {t('library.shuffle')}
+            <IconShuffle size={16} /> {t('library.shuffle')}
           </button>
           <button className="btn btn--ghost" onClick={() => setPicking(true)}>
-            + {t('playlist.addFromLibrary')}
+            <IconPlus size={16} /> {t('playlist.addFromLibrary')}
           </button>
           <UploadButton onFiles={onUploadFiles} label={t('playlist.uploadHere')} />
           {canImport && (
             <button className="btn btn--ghost" onClick={() => setImporting(true)}>
-              ⤓ {t('import.fromAudioExtract')}
+              <IconDownload size={16} /> {t('import.fromAudioExtract')}
             </button>
           )}
           <button
@@ -236,10 +243,10 @@ function LibraryPicker({
   const dialogRef = useDialogFocus<HTMLDivElement>(onClose, busy);
 
   const candidates = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = query.trim();
     return library
       .filter((track) => !exclude.has(track.id))
-      .filter((track) => !q || [track.title, track.artist, track.album].some((s) => s.toLowerCase().includes(q)));
+      .filter((track) => !q || [track.title, track.artist, track.album].some((field) => matchesQuery(field, q)));
   }, [library, exclude, query]);
 
   const allShown = candidates.length > 0 && candidates.every((track) => chosen.has(track.id));
