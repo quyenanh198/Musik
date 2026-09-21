@@ -95,3 +95,18 @@ Items marked "reproduced" were confirmed with a throwaway test before the fix; t
 - 2026-09-19: Re-reviewed the complete branch for correctness, security, accessibility, responsiveness, and deployment readiness.
 - Fixed focus resets during dialog state changes, prevented mobile theme-control clipping, added dynamic viewport-height support, and made the pre-render theme bootstrap tolerate unavailable browser storage.
 - 2026-09-21: Full audit and pro-level pass described above.
+
+## Steve Jobs Product & Design Audit (2026-09-21)
+
+Detailed audit documentation stored in [`AUDIT.md`](AUDIT.md).
+
+### Prioritized Action Plan & Status
+
+| Priority | ID | Status | Focus Area | Goal | Verification |
+| --- | --- | --- | --- | --- | --- |
+| P0 | S1 | OPEN | UI Icons | Replace all amateur unicode glyphs with crisp, accessible vector SVG icons | Visual check, build passes |
+| P0 | S2 | OPEN | Tracklist UI | Redesign tracklist: eliminate spreadsheet look, progressive disclosure for actions (••• menu), animated playing indicator | Clean table layout, full test pass |
+| P0 | S3 | OPEN | Now Playing | Ambient backdrop blur on Now Playing modal, refined drag handles, typography | Modal visual inspection, drag tests pass |
+| P1 | S4 | OPEN | Audio Engine | Seamless track pre-buffering (pre-load next track in queue ~15s before end) | Vitest player tests pass |
+| P2 | S5 | OPEN | Search | Accent-tolerant & diacritic-insensitive fuzzy search (e.g. Vietnamese diacritics) | Search unit tests pass |
+
