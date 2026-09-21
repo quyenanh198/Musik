@@ -400,8 +400,10 @@ describe('metadata: year, genre, cover', () => {
       .attach('file', png, { filename: 'art.png', contentType: 'image/png' });
     expect(res.status).toBe(200);
     expect(res.body.map((t: { cover: string | null }) => Boolean(t.cover))).toEqual([true, true]);
-    expect(readdirSync(path.join(dir, 'uploads', 'covers'))).toHaveLength(2);
+    // One image, shared: it stays on disk until the last track using it is gone.
+    expect(readdirSync(path.join(dir, 'uploads', 'covers'))).toHaveLength(1);
     await request(app).post('/api/tracks/delete').send({ ids: [a.id] });
+    expect(readdirSync(path.join(dir, 'uploads', 'covers'))).toHaveLength(1);
     await request(app).delete(`/api/tracks/${b.id}`);
     expect(readdirSync(path.join(dir, 'uploads', 'covers'))).toHaveLength(0);
   });

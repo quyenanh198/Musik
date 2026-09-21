@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS playlist_tracks (
   position INTEGER NOT NULL,
   PRIMARY KEY (playlist_id, track_id)
 );
+-- The primary key only helps lookups by playlist; deleting a track cascades by track_id.
+CREATE INDEX IF NOT EXISTS playlist_tracks_track ON playlist_tracks(track_id);
 `;
 
 export type Db = DatabaseSync;
@@ -42,6 +44,11 @@ const MIGRATIONS: Array<[column: string, ddl: string]> = [
 
 export function openDb(path: string): Db {
   const db = new DatabaseSync(path);
+  // WAL lets the many small reads (list, stream lookups) proceed while a write is in flight; busy_timeout turns a
+  // momentary lock into a short wait instead of an immediate "database is locked" error.
+  db.exec('PRAGMA journal_mode = WAL');
+  db.exec('PRAGMA synchronous = NORMAL');
+  db.exec('PRAGMA busy_timeout = 5000');
   db.exec('PRAGMA foreign_keys = ON');
   db.exec(SCHEMA);
   const have = new Set((db.prepare('PRAGMA table_info(tracks)').all() as { name: string }[]).map((c) => c.name));

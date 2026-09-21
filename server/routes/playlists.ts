@@ -3,6 +3,7 @@ import type { Db } from '../db.js';
 import { TRACK_COLUMNS } from '../db.js';
 import type { Playlist, PlaylistDetail, Track } from '../../shared/types.js';
 import { HttpError } from '../errors.js';
+import { isRecord, limitedText, MAX_NAME_LENGTH, toId, toIds } from '../validation.js';
 
 const PLAYLIST_SELECT = `
   SELECT p.id, p.name, p.created_at AS createdAt,
@@ -38,6 +39,8 @@ export function playlistsRouter(db: Db): Router {
     WHERE pt.playlist_id = ?
     ORDER BY pt.position
   `);
+  const selectOrder = db.prepare('SELECT track_id AS trackId FROM playlist_tracks WHERE playlist_id = ? ORDER BY position');
+  const setPosition = db.prepare('UPDATE playlist_tracks SET position = ? WHERE playlist_id = ? AND track_id = ?');
 
   const getPlaylist = (id: string): Playlist => {
     const playlist = selectOne.get(Number(id)) as Playlist | undefined;
@@ -51,9 +54,9 @@ export function playlistsRouter(db: Db): Router {
   });
 
   const readName = (body: unknown): string => {
-    const name = typeof body === 'object' && body !== null ? (body as { name?: unknown }).name : undefined;
+    const name = isRecord(body) ? body.name : undefined;
     if (typeof name !== 'string' || !name.trim()) throw new HttpError(400, '"name" is required');
-    return name.trim();
+    return limitedText(name, 'name', MAX_NAME_LENGTH);
   };
 
   router.get('/', (_req, res) => {
@@ -83,11 +86,10 @@ export function playlistsRouter(db: Db): Router {
 
   /** Body `{ trackId }` or `{ trackIds: [...] }` — one request adds many tracks, in the given order. */
   const readTrackIds = (body: unknown): number[] => {
-    const b = (typeof body === 'object' && body !== null ? body : {}) as { trackId?: unknown; trackIds?: unknown };
-    const raw = Array.isArray(b.trackIds) ? b.trackIds : b.trackId !== undefined ? [b.trackId] : [];
-    const ids = raw.map(Number).filter((n) => Number.isInteger(n));
-    if (ids.length === 0 || ids.length !== raw.length) throw new HttpError(400, '"trackId" or "trackIds" is required');
-    return [...new Set(ids)];
+    const b = isRecord(body) ? body : {};
+    const ids = toIds(Array.isArray(b.trackIds) ? b.trackIds : b.trackId !== undefined ? [b.trackId] : undefined);
+    if (!ids) throw new HttpError(400, '"trackId" or "trackIds" is required');
+    return ids;
   };
 
   router.post('/:id/tracks', (req, res) => {
@@ -109,6 +111,35 @@ export function playlistsRouter(db: Db): Router {
     let removed = 0;
     for (const trackId of trackIds) removed += Number(del.run(Number(req.params.id), trackId).changes);
     res.json({ removed, ...getDetail(req.params.id) });
+  });
+
+  /**
+   * Move one track to a new place in the playlist: `{ trackId, toIndex }` (0 = first; past the end = last).
+   * Sending the one move, not the whole order, keeps it correct if the list changed in another tab.
+   */
+  router.post('/:id/tracks/move', (req, res) => {
+    getPlaylist(req.params.id);
+    const b = isRecord(req.body) ? req.body : {};
+    const trackId = toId(b.trackId);
+    const toIndex = b.toIndex;
+    if (trackId === null || typeof toIndex !== 'number' || !Number.isInteger(toIndex) || toIndex < 0) {
+      throw new HttpError(400, '"trackId" and a non-negative integer "toIndex" are required');
+    }
+    const playlistId = Number(req.params.id);
+    const order = (selectOrder.all(playlistId) as unknown as { trackId: number }[]).map((row) => row.trackId);
+    const from = order.indexOf(trackId);
+    if (from === -1) throw new HttpError(404, 'Track not in playlist');
+    order.splice(from, 1);
+    order.splice(Math.min(toIndex, order.length), 0, trackId);
+    db.exec('BEGIN');
+    try {
+      order.forEach((id, position) => setPosition.run(position, playlistId, id));
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
+    res.json(getDetail(req.params.id));
   });
 
   router.delete('/:id/tracks/:trackId', (req, res) => {

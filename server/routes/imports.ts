@@ -10,9 +10,10 @@ import { TRACK_COLUMNS } from '../db.js';
 import type { Track } from '../../shared/types.js';
 import { HttpError } from '../errors.js';
 import { addTracksToPlaylist } from './playlists.js';
-import { readTags, removeCover, saveCover } from '../metadata.js';
+import { readTags, releaseCover, saveCover } from '../metadata.js';
 import { coverDirOf } from './tracks.js';
-import { createAudioExtractClient, sourceIdOf, type AudioExtractClient, type RemoteFile } from '../audioextract.js';
+import { createAudioExtractClient, isSafeRemotePath, sourceIdOf, type AudioExtractClient, type RemoteFile } from '../audioextract.js';
+import { isRecord, limitedText, safeExtension, toId } from '../validation.js';
 
 export interface ImportOptions {
   /** Base URL of the AudioExtract server (docker network), e.g. http://audioextract:3000. */
@@ -23,6 +24,7 @@ export interface ImportOptions {
 }
 
 export const MAX_REMOTE_BYTES = 200 * 1024 * 1024;
+const MAX_ITEMS_PER_IMPORT = 500;
 
 export type { RemoteFile };
 
@@ -32,6 +34,31 @@ export interface RemoteFileStatus extends RemoteFile {
   trackId: number | null;
   /** That track's title, so the picker can show what it became. */
   title: string | null;
+}
+
+interface ImportItem {
+  path: string;
+  title?: string;
+}
+
+type Outcome = { kind: 'imported'; track: Track } | { kind: 'skipped'; trackId: number; title: string };
+
+/** `{ paths: string[] }` and/or `{ items: [{ path, title? }] }` from an untrusted body. */
+function parseItems(body: Record<string, unknown>): ImportItem[] {
+  const items: ImportItem[] = [];
+  if (Array.isArray(body.items)) {
+    for (const item of body.items) {
+      if (!isRecord(item) || typeof item.path !== 'string' || !item.path) continue;
+      const title = typeof item.title === 'string' && item.title.trim() ? limitedText(item.title, 'title') : undefined;
+      items.push({ path: item.path, title });
+    }
+  }
+  if (Array.isArray(body.paths)) {
+    for (const p of body.paths) if (typeof p === 'string' && p) items.push({ path: p });
+  }
+  if (items.length === 0) throw new HttpError(400, '"paths" or "items" is required');
+  if (items.length > MAX_ITEMS_PER_IMPORT) throw new HttpError(400, `At most ${MAX_ITEMS_PER_IMPORT} files per import`);
+  return items;
 }
 
 /** Pull finished AudioExtract results into the library: list what's on that server, copy chosen files over. */
@@ -48,13 +75,19 @@ export function importsRouter(
   const selectBySource = db.prepare(
     "SELECT id, title, source_path AS sourcePath FROM tracks WHERE source_app = 'audioextract' AND source_id = ?",
   );
+  const selectByPath = db.prepare("SELECT id, title FROM tracks WHERE source_app = 'audioextract' AND source_path = ?");
   // Same song, different result folder: AudioExtract can hold the same download twice,
   // and those are separate files with separate ids. Title plus byte size is what tells
   // them apart from a genuinely new track.
   const selectByContent = db.prepare('SELECT id, title FROM tracks WHERE title = ? AND size = ?');
+  const insertTrack = db.prepare(
+    `INSERT INTO tracks (title, artist, album, year, genre, cover, duration, mime_type, size, filename,
+       source_app, source_id, source_path)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'audioextract', ?, ?)`,
+  );
 
   /**
-   * Which track, if any, came from this remote file. Matching is by the stable
+   * Which track, if any, came from this remote file (used when listing). Matching is by the stable
    * directory id, so a file renamed on the AudioExtract side is still recognised —
    * unless that directory holds several files, where only the exact path is safe.
    */
@@ -72,6 +105,80 @@ export function importsRouter(
   };
 
   const nameOf = (p: string) => path.parse(p).name;
+
+  // Imports run one at a time: two requests for the same file would otherwise both download it before either
+  // recorded it, and the second would create a duplicate.
+  let queue: Promise<unknown> = Promise.resolve();
+  const inOrder = <T>(job: () => Promise<T>): Promise<T> => {
+    const run = queue.then(job, job);
+    queue = run.catch(() => undefined);
+    return run;
+  };
+
+  /**
+   * Download one remote file into the library. Throws with a user-facing message on failure and leaves nothing on
+   * disk; returns `skipped` when the library already has that file (same path, or same title and size).
+   */
+  const importOne = async (rel: string, wanted: string | undefined, clientGone: AbortSignal): Promise<Outcome> => {
+    // Exact path only: the folder is shared by every file of one download, so a sibling is a different file.
+    const already = selectByPath.get(rel) as unknown as { id: number; title: string } | undefined;
+    if (already) return { kind: 'skipped', trackId: already.id, title: already.title };
+
+    const name = path.basename(rel);
+    const dest = path.join(uploadDir, `${randomUUID()}${safeExtension(name)}`);
+    let cover: string | null = null;
+    let kept = false;
+    // A download may take as long as it likes while data keeps arriving; silence for `timeoutMs` stops it.
+    const watchdog = new AbortController();
+    const stop = AbortSignal.any([clientGone, watchdog.signal]);
+    let idle: NodeJS.Timeout | undefined;
+    const arm = () => {
+      clearTimeout(idle);
+      idle = setTimeout(() => watchdog.abort(new HttpError(504, 'AudioExtract stopped sending data')), remote.timeoutMs);
+    };
+    try {
+      const upstream = await remote.fetchFile(rel, stop);
+      const mimeType = (upstream.headers.get('content-type') ?? '').split(';')[0].trim();
+      if (!mimeType.startsWith('audio/')) throw new HttpError(415, `Not an audio file (${mimeType || 'unknown type'})`);
+      if (!upstream.body) throw new HttpError(502, 'Empty response');
+      const declaredSize = Number(upstream.headers.get('content-length'));
+      if (Number.isFinite(declaredSize) && declaredSize > maxBytes) throw new HttpError(413, 'Remote audio file is too large');
+      let received = 0;
+      arm();
+      const limit = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          arm();
+          received += chunk.length;
+          callback(received > maxBytes ? new HttpError(413, 'Remote audio file is too large') : null, chunk);
+        },
+      });
+      await pipeline(Readable.fromWeb(upstream.body as never), limit, createWriteStream(dest), { signal: stop });
+      clearTimeout(idle);
+      const { size } = await stat(dest);
+
+      const tags = await readTags(dest, path.parse(name).name, true);
+      const title = wanted ?? tags.title;
+      const twin = selectByContent.get(title, size) as unknown as { id: number; title: string } | undefined;
+      if (twin) return { kind: 'skipped', trackId: twin.id, title: twin.title };
+      cover = tags.picture ? await saveCover(coverDir, tags.picture.data) : null;
+      const result = insertTrack.run(
+        title, tags.artist, tags.album, tags.year, tags.genre, cover, tags.duration, mimeType, size,
+        path.basename(dest), sourceIdOf(rel), rel,
+      );
+      kept = true;
+      return { kind: 'imported', track: selectOne.get(Number(result.lastInsertRowid)) as unknown as Track };
+    } catch (error) {
+      // An abort surfaces as a generic AbortError; the watchdog's own reason is the useful message.
+      if (stop.aborted && stop.reason instanceof HttpError) throw stop.reason;
+      throw error;
+    } finally {
+      clearTimeout(idle);
+      if (!kept) {
+        await unlink(dest).catch(() => {});
+        await releaseCover(db, coverDir, cover);
+      }
+    }
+  };
 
   router.get('/sources', (_req, res) => {
     res.json({ audioextract: remote.configured });
@@ -107,86 +214,44 @@ export function importsRouter(
    * → copies each file in (a given title overrides the tag/filename), returns what landed and what failed.
    */
   router.post('/audioextract', async (req, res) => {
-    const body = (req.body ?? {}) as { paths?: unknown; items?: unknown; playlistId?: unknown };
-    const items: { path: string; title?: string }[] = [];
-    if (Array.isArray(body.items)) {
-      for (const it of body.items) {
-        if (it && typeof it === 'object' && typeof (it as { path?: unknown }).path === 'string' && (it as { path: string }).path) {
-          const title = (it as { title?: unknown }).title;
-          items.push({ path: (it as { path: string }).path, title: typeof title === 'string' && title.trim() ? title.trim() : undefined });
-        }
-      }
-    }
-    if (Array.isArray(body.paths)) {
-      for (const p of body.paths) if (typeof p === 'string' && p) items.push({ path: p });
-    }
-    if (items.length === 0) throw new HttpError(400, '"paths" or "items" is required');
+    const body = isRecord(req.body) ? req.body : {};
+    const items = parseItems(body);
     let playlistId: number | undefined;
     if (body.playlistId !== undefined && body.playlistId !== null && body.playlistId !== '') {
-      playlistId = Number(body.playlistId);
-      if (!Number.isInteger(playlistId)) throw new HttpError(400, 'Invalid playlistId');
-      if (!db.prepare('SELECT 1 FROM playlists WHERE id = ?').get(playlistId)) throw new HttpError(404, 'Playlist not found');
+      const id = toId(body.playlistId);
+      if (id === null) throw new HttpError(400, 'Invalid playlistId');
+      if (!db.prepare('SELECT 1 FROM playlists WHERE id = ?').get(id)) throw new HttpError(404, 'Playlist not found');
+      playlistId = id;
     }
+
+    // If the browser goes away mid-import, stop downloading for nobody.
+    const clientGone = new AbortController();
+    res.once('close', () => {
+      if (!res.writableFinished) clientGone.abort();
+    });
 
     const imported: Track[] = [];
     const failed: { path: string; error: string }[] = [];
     const skipped: { path: string; trackId: number; title: string }[] = [];
-    const seen = new Set<string>();
-    for (const { path: rel, title: wanted } of items) {
-      if (seen.has(rel)) continue;
-      seen.add(rel);
-      // Already in the library: adding it again would just duplicate the track.
-      const already = importedFrom({ path: rel, name: path.basename(rel), size: 0, updatedAt: '' }, new Set());
-      if (already) {
-        skipped.push({ path: rel, trackId: already.id, title: already.title });
-        continue;
-      }
-      const name = path.basename(rel);
-      const dest = path.join(uploadDir, `${randomUUID()}${path.extname(name)}`);
-      let cover: string | null = null;
-      try {
-        const upstream = await remote.fetchFile(rel);
-        const mimeType = (upstream.headers.get('content-type') ?? '').split(';')[0].trim();
-        if (!mimeType.startsWith('audio/')) throw new HttpError(415, `Not an audio file (${mimeType || 'unknown type'})`);
-        if (!upstream.body) throw new HttpError(502, 'Empty response');
-        const declaredSize = Number(upstream.headers.get('content-length'));
-        if (Number.isFinite(declaredSize) && declaredSize > maxBytes) throw new HttpError(413, 'Remote audio file is too large');
-        let received = 0;
-        const limit = new Transform({
-          transform(chunk: Buffer, _encoding, callback) {
-            received += chunk.length;
-            callback(received > maxBytes ? new HttpError(413, 'Remote audio file is too large') : null, chunk);
-          },
-        });
-        await pipeline(Readable.fromWeb(upstream.body as never), limit, createWriteStream(dest));
-        const { size } = await stat(dest);
-
-        const tags = await readTags(dest, path.parse(name).name, true);
-        const title = wanted ?? tags.title;
-        const twin = selectByContent.get(title, size) as unknown as { id: number; title: string } | undefined;
-        if (twin) {
-          await unlink(dest).catch(() => {});
-          skipped.push({ path: rel, trackId: twin.id, title: twin.title });
+    await inOrder(async () => {
+      const seen = new Set<string>();
+      for (const { path: rel, title } of items) {
+        if (clientGone.signal.aborted) return;
+        if (seen.has(rel)) continue;
+        seen.add(rel);
+        if (!isSafeRemotePath(rel)) {
+          failed.push({ path: rel, error: 'Invalid path' });
           continue;
         }
-        cover = tags.picture ? await saveCover(coverDir, tags.picture.data, tags.picture.format) : null;
-        const result = db
-          .prepare(
-            `INSERT INTO tracks (title, artist, album, year, genre, cover, duration, mime_type, size, filename,
-               source_app, source_id, source_path)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'audioextract', ?, ?)`,
-          )
-          .run(
-            title, tags.artist, tags.album, tags.year, tags.genre, cover, tags.duration, mimeType, size,
-            path.basename(dest), sourceIdOf(rel), rel,
-          );
-        imported.push(selectOne.get(Number(result.lastInsertRowid)) as unknown as Track);
-      } catch (e) {
-        await unlink(dest).catch(() => {});
-        await removeCover(coverDir, cover);
-        failed.push({ path: rel, error: (e as Error).message });
+        try {
+          const outcome = await importOne(rel, title, clientGone.signal);
+          if (outcome.kind === 'imported') imported.push(outcome.track);
+          else skipped.push({ path: rel, trackId: outcome.trackId, title: outcome.title });
+        } catch (e) {
+          failed.push({ path: rel, error: (e as Error).message });
+        }
       }
-    }
+    });
 
     if (playlistId !== undefined && imported.length > 0) {
       addTracksToPlaylist(

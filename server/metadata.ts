@@ -2,6 +2,7 @@ import { parseFile } from 'music-metadata';
 import { randomUUID } from 'node:crypto';
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { Db } from './db.js';
 
 export interface Tags {
   title: string;
@@ -37,6 +38,7 @@ export async function readTags(filePath: string, fallbackTitle: string, strict =
   return tags;
 }
 
+/** What a client claims a cover is. A cheap first gate only: `sniffImage` looks at the bytes. */
 export const COVER_TYPES: Record<string, string> = {
   'image/jpeg': '.jpg',
   'image/jpg': '.jpg',
@@ -47,16 +49,38 @@ export const COVER_TYPES: Record<string, string> = {
 
 export const MAX_COVER_BYTES = 8 * 1024 * 1024;
 
-/** Store cover bytes under `coverDir`; returns the file name to keep in the DB. */
-export async function saveCover(coverDir: string, data: Uint8Array, mime: string): Promise<string | null> {
-  const ext = COVER_TYPES[mime.toLowerCase()];
-  if (!ext || data.length === 0 || data.length > MAX_COVER_BYTES) return null;
+/** What the bytes really are, from the file signature; null for anything that is not JPEG, PNG, GIF or WebP. */
+export function sniffImage(data: Uint8Array): { mime: string; ext: string } | null {
+  if (data.length < 12) return null;
+  const ascii = (start: number, text: string) => [...text].every((char, i) => data[start + i] === char.charCodeAt(0));
+  if (data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) return { mime: 'image/jpeg', ext: '.jpg' };
+  if (data[0] === 0x89 && ascii(1, 'PNG') && data[4] === 0x0d && data[5] === 0x0a && data[6] === 0x1a && data[7] === 0x0a) {
+    return { mime: 'image/png', ext: '.png' };
+  }
+  if (ascii(0, 'GIF87a') || ascii(0, 'GIF89a')) return { mime: 'image/gif', ext: '.gif' };
+  if (ascii(0, 'RIFF') && ascii(8, 'WEBP')) return { mime: 'image/webp', ext: '.webp' };
+  return null;
+}
+
+/**
+ * Store cover bytes under `coverDir`; returns the file name to keep in the DB, or null when the bytes are not a
+ * usable image (empty, too large, or not really JPEG/PNG/GIF/WebP whatever the upload claimed).
+ */
+export async function saveCover(coverDir: string, data: Uint8Array): Promise<string | null> {
+  const kind = sniffImage(data);
+  if (!kind || data.length > MAX_COVER_BYTES) return null;
   await mkdir(coverDir, { recursive: true });
-  const name = `${randomUUID()}${ext}`;
+  const name = `${randomUUID()}${kind.ext}`;
   await writeFile(path.join(coverDir, name), data);
   return name;
 }
 
-export async function removeCover(coverDir: string, name: string | null | undefined): Promise<void> {
-  if (name) await unlink(path.join(coverDir, name)).catch(() => {});
+/**
+ * Delete a cover file once no track points at it any more. One image can be shared by many tracks (album art),
+ * so call this after the rows that used it were updated or deleted.
+ */
+export async function releaseCover(db: Db, coverDir: string, name: string | null | undefined): Promise<void> {
+  if (!name) return;
+  const { uses } = db.prepare('SELECT COUNT(*) AS uses FROM tracks WHERE cover = ?').get(name) as unknown as { uses: number };
+  if (uses === 0) await unlink(path.join(coverDir, name)).catch(() => {});
 }
