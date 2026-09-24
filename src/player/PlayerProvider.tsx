@@ -94,6 +94,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   /** Whether the next load should start playing (false only when restoring a saved session). */
   const autoplayRef = useRef(true);
   const pendingSeekRef = useRef(0);
+  /** Last known position for browsers that discard their media pipeline while the screen is locked. */
+  const resumePositionRef = useRef(0);
   /** Tracks that failed in a row; when every queued track has failed the player stops instead of cycling forever. */
   const failuresRef = useRef(0);
   const restoredRef = useRef(false);
@@ -104,12 +106,16 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const begin = useCallback(() => {
     autoplayRef.current = true;
     failuresRef.current = 0;
+    pendingSeekRef.current = 0;
+    resumePositionRef.current = 0;
     persistOn.current = true;
   }, []);
 
   const halt = useCallback(() => {
     audio.pause();
     audio.removeAttribute('src');
+    pendingSeekRef.current = 0;
+    resumePositionRef.current = 0;
     setPlaying(false);
     setTime({ currentTime: 0, duration: 0 });
   }, [audio]);
@@ -135,11 +141,15 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     if (stop) {
       audio.pause();
       audio.currentTime = 0;
+      pendingSeekRef.current = 0;
+      resumePositionRef.current = 0;
       setPlaying(false);
       setTime((t) => ({ ...t, currentTime: 0 }));
       return;
     }
     autoplayRef.current = true;
+    pendingSeekRef.current = 0;
+    resumePositionRef.current = 0;
     commit(state);
   }, [audio, commit]);
 
@@ -148,14 +158,18 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     // Standard behaviour: restart the track unless we're right at its start.
     if (audio.currentTime > 3) {
       audio.currentTime = 0;
+      resumePositionRef.current = 0;
       return;
     }
     const back = Q.previous(qRef.current);
     if (!back) {
       audio.currentTime = 0;
+      resumePositionRef.current = 0;
       return;
     }
     autoplayRef.current = true;
+    pendingSeekRef.current = 0;
+    resumePositionRef.current = 0;
     commit(back);
   }, [audio, commit]);
 
@@ -167,20 +181,37 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     [begin, commit],
   );
 
+  const resume = useCallback(() => {
+    if (qRef.current.index < 0) return;
+    // A suspended mobile tab can retain the track but lose the audio element's position.
+    if (audio.currentTime === 0 && resumePositionRef.current > 0 && !pendingSeekRef.current) {
+      pendingSeekRef.current = resumePositionRef.current;
+    }
+    if (pendingSeekRef.current > 0 && audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      audio.currentTime = pendingSeekRef.current;
+      pendingSeekRef.current = 0;
+    }
+    void audio.play().catch((e: DOMException) => {
+      if (e.name !== 'AbortError') setPlaying(false);
+    });
+  }, [audio]);
+
   const toggle = useCallback(() => {
     if (qRef.current.index < 0) return;
-    if (audio.paused) {
-      void audio.play().catch((e: DOMException) => {
-        if (e.name !== 'AbortError') setPlaying(false);
-      });
-    } else audio.pause();
-  }, [audio]);
+    if (audio.paused) resume();
+    else {
+      resumePositionRef.current = audio.currentTime;
+      audio.pause();
+    }
+  }, [audio, resume]);
 
   const seek = useCallback(
     (seconds: number) => {
       const limit = Number.isFinite(audio.duration) ? audio.duration : Infinity;
       const target = Math.max(0, Math.min(seconds, limit));
       audio.currentTime = target;
+      pendingSeekRef.current = 0;
+      resumePositionRef.current = target;
       setTime((t) => ({ ...t, currentTime: target }));
     },
     [audio],
@@ -244,6 +275,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         if (restored) {
           autoplayRef.current = false;
           pendingSeekRef.current = restored.position;
+          resumePositionRef.current = restored.position;
           commit({ ...restored.state, token: qRef.current.token + 1 });
         }
       }
@@ -256,19 +288,19 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const currentId = current?.id ?? null;
   useEffect(() => {
     if (currentId === null) return;
+    const restoring = pendingSeekRef.current > 0;
+    if (!restoring) resumePositionRef.current = 0;
     audio.src = api.streamUrl(currentId);
-    const seekTo = pendingSeekRef.current;
-    pendingSeekRef.current = 0;
-    if (seekTo > 0) {
-      audio.addEventListener(
-        'loadedmetadata',
-        () => {
-          audio.currentTime = seekTo;
-          setTime((t) => ({ ...t, currentTime: seekTo }));
-        },
-        { once: true },
-      );
-    }
+    const applyPendingSeek = () => {
+      const seekTo = pendingSeekRef.current;
+      if (seekTo <= 0) return;
+      audio.currentTime = seekTo;
+      pendingSeekRef.current = 0;
+      resumePositionRef.current = seekTo;
+      setTime((t) => ({ ...t, currentTime: seekTo }));
+    };
+    audio.addEventListener('loadedmetadata', applyPendingSeek);
+    if (audio.readyState >= HTMLMediaElement.HAVE_METADATA) applyPendingSeek();
     if (autoplayRef.current) {
       // A newer load interrupting this one rejects with AbortError; that is not "stopped".
       void audio.play().catch((e: DOMException) => {
@@ -276,7 +308,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       });
     }
     autoplayRef.current = true;
+    return () => audio.removeEventListener('loadedmetadata', applyPendingSeek);
+  }, [audio, currentId, q.token]);
 
+  // Queue edits and repeat changes only affect preloading; they must not reset the playing element's src.
+  useEffect(() => {
+    if (currentId === null) return;
     // Pre-buffer the next track in the queue using the dedicated preload element
     const nextIndex = q.index + 1;
     const nextTrack = nextIndex < q.queue.length ? q.queue[nextIndex] : q.repeat === 'all' && q.queue.length > 0 ? q.queue[0] : null;
@@ -291,7 +328,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   // Mirror audio element events into state.
   useEffect(() => {
-    const onTime = () => setTime((t) => ({ ...t, currentTime: audio.currentTime }));
+    const onTime = () => {
+      if (audio.currentTime > 0) resumePositionRef.current = audio.currentTime;
+      setTime((t) => ({ ...t, currentTime: audio.currentTime }));
+    };
     const onDuration = () => setTime((t) => ({ ...t, duration: Number.isFinite(audio.duration) ? audio.duration : 0 }));
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
@@ -306,6 +346,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       }
       if (qRef.current.repeat === 'one') {
         audio.currentTime = 0;
+        resumePositionRef.current = 0;
         void audio.play().catch(() => {});
       } else next();
     };
@@ -354,7 +395,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
     const ms = navigator.mediaSession;
-    ms.setActionHandler('play', () => void audio.play().catch(() => {}));
+    ms.setActionHandler('play', resume);
     ms.setActionHandler('pause', () => audio.pause());
     ms.setActionHandler('previoustrack', prev);
     ms.setActionHandler('nexttrack', next);
@@ -365,7 +406,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     return () => {
       for (const action of ['play', 'pause', 'previoustrack', 'nexttrack', 'seekto'] as const) ms.setActionHandler(action, null);
     };
-  }, [audio, next, prev, seek]);
+  }, [audio, next, prev, resume, seek]);
 
   // Lock-screen metadata. iOS only picks it up once its Now Playing session exists (i.e. after
   // playback actually starts) and ignores SVG artwork, so re-apply on every `playing` with PNGs.
@@ -424,7 +465,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const persist = useCallback(() => {
     if (!persistOn.current) return;
     if (qRef.current.queue.length === 0) removeStored(PLAYBACK_KEY);
-    else writeStored(PLAYBACK_KEY, JSON.stringify(serializePlayback(qRef.current, audio.currentTime)));
+    else writeStored(PLAYBACK_KEY, JSON.stringify(serializePlayback(qRef.current, pendingSeekRef.current || (audio.currentTime > 0 ? audio.currentTime : resumePositionRef.current))));
   }, [audio]);
 
   useEffect(() => {
