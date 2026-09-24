@@ -25,7 +25,8 @@ const IDLE: UploadState = { active: false, total: 0, done: 0, currentName: null,
 export interface UploaderHandlers {
   /** Called as each file lands, so lists fill up while the rest are still going. */
   onTrack: (track: Track) => Promise<void> | void;
-  onFinish: (result: { uploaded: Track[]; failures: UploadFailure[] }) => void;
+  /** `skipped` là những file server nhận ra đã có sẵn trong thư viện, không thêm dòng mới. */
+  onFinish: (result: { uploaded: Track[]; skipped: Track[]; failures: UploadFailure[] }) => void;
 }
 
 class NotAudioError extends Error {}
@@ -42,6 +43,7 @@ export function useUploader(handlers: UploaderHandlers) {
 
   const run = useCallback(async () => {
     const uploaded: Track[] = [];
+    const skipped: Track[] = [];
     const failures: UploadFailure[] = [];
     while (pending.current.length > 0) {
       const file = pending.current.shift() as File;
@@ -50,7 +52,8 @@ export function useUploader(handlers: UploaderHandlers) {
         const audio = asAudioFile(file);
         if (!audio) throw new NotAudioError();
         const track = await api.uploadTrack(audio, (fraction) => setState((s) => ({ ...s, fraction })));
-        uploaded.push(track);
+        if (track.alreadyInLibrary) skipped.push(track);
+        else uploaded.push(track);
         await handlersRef.current.onTrack(track);
       } catch (e) {
         failures.push({ name: file.name, error: e instanceof NotAudioError ? undefined : (e as Error).message });
@@ -59,7 +62,7 @@ export function useUploader(handlers: UploaderHandlers) {
     }
     running.current = false;
     setState((s) => ({ ...s, active: false, currentName: null, fraction: 0, failures: [...s.failures, ...failures] }));
-    handlersRef.current.onFinish({ uploaded, failures });
+    handlersRef.current.onFinish({ uploaded, skipped, failures });
   }, [handlersRef]);
 
   const enqueue = useCallback(

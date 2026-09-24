@@ -47,12 +47,15 @@ function uploadWithProgress<T>(url: string, form: FormData, onProgress?: (fracti
   });
 }
 
+export type UploadedTrack = Track & { alreadyInLibrary?: boolean };
+
 export const api = {
   listTracks: () => request<Track[]>('/api/tracks'),
+  /** Bài đã có trong thư viện thì server trả lại chính bài đó kèm `alreadyInLibrary`, không thêm dòng mới. */
   uploadTrack: (file: File, onProgress?: (fraction: number) => void) => {
     const form = new FormData();
     form.append('file', file);
-    return uploadWithProgress<Track>('/api/tracks', form, onProgress);
+    return uploadWithProgress<UploadedTrack>('/api/tracks', form, onProgress);
   },
   updateTrack: (id: number, patch: TrackPatch) => request<Track>(`/api/tracks/${id}`, json('PATCH', patch)),
   uploadCover: (id: number, file: File) => {

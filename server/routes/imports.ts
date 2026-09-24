@@ -12,6 +12,7 @@ import { HttpError } from '../errors.js';
 import { addTracksToPlaylist } from './playlists.js';
 import { readTags, releaseCover, saveCover } from '../metadata.js';
 import { coverDirOf } from './tracks.js';
+import { findDuplicate } from '../duplicates.js';
 import { createAudioExtractClient, isSafeRemotePath, sourceIdOf, type AudioExtractClient, type RemoteFile } from '../audioextract.js';
 import { isRecord, limitedText, safeExtension, toId } from '../validation.js';
 
@@ -77,9 +78,12 @@ export function importsRouter(
   );
   const selectByPath = db.prepare("SELECT id, title FROM tracks WHERE source_app = 'audioextract' AND source_path = ?");
   // Same song, different result folder: AudioExtract can hold the same download twice,
-  // and those are separate files with separate ids. Title plus byte size is what tells
-  // them apart from a genuinely new track.
-  const selectByContent = db.prepare('SELECT id, title FROM tracks WHERE title = ? AND size = ?');
+  // and those are separate files with separate ids. Two downloads of one song differ by
+  // a few bytes of tag padding, so the comparison is title + duration + approximate size
+  // (see server/duplicates.ts) rather than an exact byte match.
+  const selectByTitle = db.prepare(
+    'SELECT id, title, duration, size FROM tracks WHERE lower(trim(title)) = lower(trim(?))',
+  );
   const insertTrack = db.prepare(
     `INSERT INTO tracks (title, artist, album, year, genre, cover, duration, mime_type, size, filename,
        source_app, source_id, source_path)
@@ -158,7 +162,10 @@ export function importsRouter(
 
       const tags = await readTags(dest, path.parse(name).name, true);
       const title = wanted ?? tags.title;
-      const twin = selectByContent.get(title, size) as unknown as { id: number; title: string } | undefined;
+      const twin = findDuplicate(
+        selectByTitle.all(title) as unknown as { id: number; title: string; duration: number | null; size: number }[],
+        { title, duration: tags.duration, size },
+      );
       if (twin) return { kind: 'skipped', trackId: twin.id, title: twin.title };
       cover = tags.picture ? await saveCover(coverDir, tags.picture.data) : null;
       const result = insertTrack.run(

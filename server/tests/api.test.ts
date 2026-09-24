@@ -53,6 +53,30 @@ describe('tracks', () => {
     expect(list.body[0].id).toBe(res.body.id);
   });
 
+  it('tải lên đúng bài đã có thì nhận lại bài cũ, không thêm dòng thứ hai', async () => {
+    const first = await uploadTrack('My Song.wav', 2);
+    expect(first.status).toBe(201);
+
+    const again = await uploadTrack('My Song.wav', 2);
+    expect(again.body.id).toBe(first.body.id);
+    expect(again.body.alreadyInLibrary).toBe(true);
+
+    const list = await request(app).get('/api/tracks');
+    expect(list.body).toHaveLength(1);
+    // Không để lại file mồ côi trong thư mục uploads.
+    expect(readdirSync(path.join(dir, 'uploads')).filter((f) => f.endsWith('.wav'))).toHaveLength(1);
+  });
+
+  it('bài khác độ dài trùng tên vẫn là hai bài riêng', async () => {
+    const short = await uploadTrack('Bản thu.wav', 2);
+    const long = await uploadTrack('Bản thu.wav', 5);
+    expect(long.status).toBe(201);
+    expect(long.body.id).not.toBe(short.body.id);
+
+    const list = await request(app).get('/api/tracks');
+    expect(list.body).toHaveLength(2);
+  });
+
   it('rejects non-audio uploads', async () => {
     const res = await request(app)
       .post('/api/tracks')

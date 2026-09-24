@@ -8,6 +8,7 @@ import type { Db } from '../db.js';
 import { TRACK_COLUMNS } from '../db.js';
 import type { Track } from '../../shared/types.js';
 import { HttpError } from '../errors.js';
+import { findDuplicate } from '../duplicates.js';
 import type { AudioExtractClient } from '../audioextract.js';
 import { isRecord, limitedText, safeExtension, toIds } from '../validation.js';
 
@@ -55,6 +56,9 @@ export function parseTrackPatch(raw: unknown): TrackFields {
 export function tracksRouter(db: Db, uploadDir: string, audioExtract?: AudioExtractClient): Router {
   const router = Router();
   const coverDir = coverDirOf(uploadDir);
+  const selectByTitle = db.prepare(
+    'SELECT id, title, duration, size FROM tracks WHERE lower(trim(title)) = lower(trim(?))',
+  );
 
   const selectSource = db.prepare(
     "SELECT id, source_path AS sourcePath FROM tracks WHERE id = ? AND source_app = 'audioextract' AND source_path IS NOT NULL",
@@ -153,6 +157,18 @@ export function tracksRouter(db: Db, uploadDir: string, audioExtract?: AudioExtr
     try {
       // Browsers send multipart names as UTF-8, while busboy exposes them as latin1.
       const tags = await readTags(file.path, path.parse(fixFilename(file.originalname)).name, true);
+      // Tải lại đúng bài đã có (hay gặp: một bản nhập từ AudioExtract, một bản tự tải rồi
+      // kéo lên) thì trả về bản cũ thay vì thêm dòng thứ hai — thư viện từng đầy những cặp
+      // như vậy, tìm một bài ra hai kết quả.
+      const twin = findDuplicate(
+        selectByTitle.all(tags.title) as unknown as { id: number; title: string; duration: number | null; size: number }[],
+        { title: tags.title, duration: tags.duration, size: file.size },
+      );
+      if (twin) {
+        await unlink(file.path).catch(() => {});
+        res.json({ ...(getTrack(twin.id) as object), alreadyInLibrary: true });
+        return;
+      }
       cover = tags.picture ? await saveCover(coverDir, tags.picture.data) : null;
       const result = db
         .prepare(

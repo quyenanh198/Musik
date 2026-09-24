@@ -166,6 +166,8 @@ const en = {
 
   'toast.uploaded': 'Uploaded {n} tracks',
   'toast.uploaded_one': 'Uploaded {n} track',
+  'toast.uploadSkipped': '{n} were already in your library',
+  'toast.uploadSkipped_one': '{n} was already in your library',
   'toast.playbackError': 'Can’t play “{title}”',
   'toast.addedOne': 'Added "{title}" to {name}',
   'toast.alreadyIn': '"{title}" is already in {name}',
@@ -348,6 +350,8 @@ const vi: Record<MessageKey, string> = {
 
   'toast.uploaded': 'Đã tải lên {n} bài',
   'toast.uploaded_one': 'Đã tải lên {n} bài',
+  'toast.uploadSkipped': '{n} bài đã có sẵn',
+  'toast.uploadSkipped_one': '{n} bài đã có sẵn',
   'toast.playbackError': 'Không phát được “{title}”',
   'toast.addedOne': 'Đã thêm "{title}" vào {name}',
   'toast.alreadyIn': '"{title}" đã có trong {name}',

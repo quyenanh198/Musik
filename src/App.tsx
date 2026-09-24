@@ -113,9 +113,12 @@ export function App() {
       }
       refreshTracks();
     },
-    onFinish: ({ uploaded }) => {
+    onFinish: ({ uploaded, skipped }) => {
       refreshPlaylists();
-      if (uploaded.length > 0) notify(t('toast.uploaded', { n: uploaded.length }));
+      const parts = [];
+      if (uploaded.length > 0) parts.push(t('toast.uploaded', { n: uploaded.length }));
+      if (skipped.length > 0) parts.push(t('toast.uploadSkipped', { n: skipped.length }));
+      if (parts.length > 0) notify(parts.join(' · '));
     },
   });
   const uploadFiles = uploader.enqueue;
